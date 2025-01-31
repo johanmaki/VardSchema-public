@@ -33,7 +33,6 @@ LANGUAGES = {
             5: "5 - Expert",
             6: "6 - Avdelningsansvarig"
         },
-        # ... fler översättningar
     },
     "en": {
         "title": "AI-Powered Staff Scheduling",
@@ -47,11 +46,9 @@ LANGUAGES = {
             5: "5 - Expert",
             6: "6 - Department lead"
         },
-        # ... more translations
     }
 }
 
-# ========== INITIERING ==========
 def initialize_session():
     if "staff" not in st.session_state:
         st.session_state.staff = []
@@ -62,7 +59,6 @@ def initialize_session():
 
 initialize_session()
 
-# ========== ANPASSAD CSS ==========
 def get_css(theme):
     colors = THEME_COLORS["dark" if st.session_state.dark_mode else "light"]
     return f"""
@@ -70,9 +66,6 @@ def get_css(theme):
         .main {{
             background-color: {colors['background']};
             color: {colors['text']};
-        }}
-        .stTextInput>div>div>input, .stSelectbox>div>div>select {{
-            color: {colors['text']} !important;
         }}
         .stDataFrame {{
             border: 2px solid {colors['primary']};
@@ -82,11 +75,9 @@ def get_css(theme):
             background: {colors['primary']} !important;
             color: white !important;
         }}
-        .css-1d391kg {{background-color: {colors['background']};}}
     </style>
     """
 
-# ========== FUNKTIONER ==========
 def generate_fair_schedule(staff, min_daily_score=20, days_in_week=7):
     shifts = defaultdict(int)
     schedule = {day: {"staff": [], "score": 0} for day in range(days_in_week)}
@@ -96,7 +87,6 @@ def generate_fair_schedule(staff, min_daily_score=20, days_in_week=7):
         daily_score = 0
         available_workers = sorted(staff, key=lambda x: (shifts[x["name"]], -x["experience"]))
         
-        # AI-schemaläggning
         for worker in available_workers:
             if daily_score >= min_daily_score:
                 break
@@ -105,7 +95,6 @@ def generate_fair_schedule(staff, min_daily_score=20, days_in_week=7):
                 daily_score += worker["experience"]
                 shifts[worker["name"]] += 1
         
-        # Reservmekanism
         while daily_score < min_daily_score:
             for worker in available_workers:
                 if worker["name"] not in daily_team:
@@ -119,7 +108,6 @@ def generate_fair_schedule(staff, min_daily_score=20, days_in_week=7):
     
     return schedule, shifts
 
-# ========== GRÄNSSNITTSKOMPONENTER ==========
 def staff_input_section(lang):
     st.subheader(lang["add_staff"])
     col1, col2, col3 = st.columns([3, 2, 1])
@@ -134,7 +122,6 @@ def staff_input_section(lang):
             key="new_exp"
         )
     with col3:
-        st.write("")  # För placering
         if st.button("➕ Lägg till", use_container_width=True):
             if name.strip():
                 st.session_state.staff.append({"name": name.strip(), "experience": exp})
@@ -147,22 +134,20 @@ def staff_list_editor(lang):
         edited_df = st.data_editor(
             df,
             column_config={
-                "experience": st.column_config.SelectboxColumn(
-                    "Erfarenhetsnivå",
-                    options=list(lang["experience_labels"].keys()),
-                    format_func=lambda x: lang["experience_labels"][x]
-                )
+                "experience": {
+                    "label": "Erfarenhetsnivå",
+                    "type": "number",
+                    "help": "Välj från 1 (nybörjare) till 6 (expert)"
+                }
             },
             use_container_width=True,
             num_rows="dynamic"
         )
         st.session_state.staff = edited_df.to_dict("records")
 
-# ========== HUVUDLAYOUT ==========
 def main():
     lang = LANGUAGES[st.session_state.language]
     
-    # Header med språk- och temaväljare
     header_col1, header_col2, header_col3 = st.columns([2, 1, 1])
     with header_col1:
         st.image("vardschema.png", width=200)
@@ -173,11 +158,8 @@ def main():
     
     st.title(lang["title"])
     st.caption(lang["subtitle"])
-    
-    # Tillämpa tema
     st.markdown(get_css(st.session_state.dark_mode), unsafe_allow_html=True)
     
-    # Instruktioner
     with st.expander("❓ Hur använder jag detta verktyg?", expanded=True):
         st.markdown("""
         1. **Lägg till personal** med formuläret nedan
@@ -186,11 +168,9 @@ def main():
         4. Exportera eller spara resultatet
         """)
     
-    # Personalhantering
     staff_input_section(lang)
     staff_list_editor(lang)
     
-    # Sidofältsinställningar
     with st.sidebar:
         st.header("⚙️ Inställningar")
         min_score = st.slider(
@@ -209,7 +189,6 @@ def main():
             st.session_state.staff = []
             st.rerun()
     
-    # Schemagenerering
     if st.button("🚀 Generera schema", use_container_width=True):
         if not st.session_state.staff:
             st.error("Lägg till personal först")
@@ -217,7 +196,6 @@ def main():
             with st.spinner("🤖 AI optimerar ditt schema..."):
                 schedule, shifts = generate_fair_schedule(st.session_state.staff, min_score)
                 
-                # Visa schema
                 st.success("✅ Schema genererat!")
                 days = ["Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag", "Lördag", "Söndag"]
                 schedule_df = pd.DataFrame([
@@ -231,15 +209,12 @@ def main():
                     hide_index=True
                 )
                 
-                # Visualiseringar
-                st.subheader("📊 Fördelning av skift")
                 fig, ax = plt.subplots(figsize=(10, 4))
                 ax.bar(shifts.keys(), shifts.values(), color=THEME_COLORS["dark" if st.session_state.dark_mode else "light"]["primary"])
                 plt.xticks(rotation=45)
                 plt.ylabel("Antal skift")
                 st.pyplot(fig)
                 
-                # Exportering
                 st.download_button(
                     "📥 Ladda ner schema som Excel",
                     data=schedule_df.to_csv(index=False).encode("utf-8"),
