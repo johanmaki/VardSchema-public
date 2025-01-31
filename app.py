@@ -82,26 +82,43 @@ def generate_fair_schedule(staff, min_daily_score=20, days_in_week=7):
     shifts = defaultdict(int)
     schedule = {day: {"staff": [], "score": 0} for day in range(days_in_week)}
     
+    # Beräkna total tillgänglig erfarenhet
+    total_experience = sum(member["experience"] for member in staff)
+    
+    # Validera att personalstyrkan är tillräcklig
+    if total_experience < min_daily_score * days_in_week:
+        raise ValueError(f"Otillräcklig total erfarenhet ({total_experience}). Måste vara minst {min_daily_score * days_in_week}")
+    
     for day in schedule:
         daily_team = []
         daily_score = 0
         available_workers = sorted(staff, key=lambda x: (shifts[x["name"]], -x["experience"]))
         
+        # Steg 1: Välj kärnpersonal
         for worker in available_workers:
             if daily_score >= min_daily_score:
                 break
-            if (shifts[worker["name"]] <= min(shifts.values())) or (random.random() < 0.3):
+            if shifts[worker["name"]] <= min(shifts.values(), default=0):
                 daily_team.append(worker["name"])
                 daily_score += worker["experience"]
                 shifts[worker["name"]] += 1
         
-        while daily_score < min_daily_score:
+        # Steg 2: Fyll på om nödvändigt (med fallback-logik)
+        backup_attempts = 0
+        while daily_score < min_daily_score and backup_attempts < 3:
             for worker in available_workers:
                 if worker["name"] not in daily_team:
                     daily_team.append(worker["name"])
                     daily_score += worker["experience"]
                     shifts[worker["name"]] += 1
-                    break
+                    if daily_score >= min_daily_score:
+                        break
+            backup_attempts += 1
+        
+        # Fallback om fortfarande under minimum
+        if daily_score < min_daily_score:
+            required = min_daily_score - daily_score
+            raise ValueError(f"Kunde inte nå minimipoäng {min_daily_score} för {days[day]}. Saknar {required} poäng.")
         
         schedule[day]["staff"] = daily_team
         schedule[day]["score"] = daily_score
