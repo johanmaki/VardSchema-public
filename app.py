@@ -4,7 +4,42 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 import random
 
-# ======== AI Scheduling Logic ========
+# ========== CONFIGURATION ==========
+THEME_COLOR = "#1E88E5"
+SECONDARY_COLOR = "#FF6D00"
+BG_COLOR = "#F5F5F5"
+
+# ========== CUSTOM CSS ==========
+st.markdown(f"""
+    <style>
+        .reportview-container {{
+            background: {BG_COLOR};
+        }}
+        .main .block-container {{
+            padding-top: 2rem;
+        }}
+        h1 {{
+            color: {THEME_COLOR};
+        }}
+        .stDataFrame {{
+            border: 2px solid {THEME_COLOR};
+            border-radius: 10px;
+        }}
+        .stButton>button {{
+            background: {THEME_COLOR};
+            color: white;
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+        }}
+        .stDownloadButton>button {{
+            background: {SECONDARY_COLOR} !important;
+        }}
+        footer {{visibility: hidden;}}
+        #MainMenu {{visibility: hidden;}}
+    </style>
+""", unsafe_allow_html=True)
+
+# ========== FUNCTIONS ==========
 def generate_fair_schedule(staff, min_daily_score=20, days_in_week=7):
     shifts = defaultdict(int)
     schedule = {day: {"staff": [], "score": 0} for day in range(days_in_week)}
@@ -14,7 +49,7 @@ def generate_fair_schedule(staff, min_daily_score=20, days_in_week=7):
         daily_score = 0
         available_workers = sorted(staff, key=lambda x: (shifts[x["name"]], -x["experience"]))
         
-        # Build team to meet minimum score
+        # AI-powered scheduling
         for worker in available_workers:
             if daily_score >= min_daily_score:
                 break
@@ -23,7 +58,7 @@ def generate_fair_schedule(staff, min_daily_score=20, days_in_week=7):
                 daily_score += worker["experience"]
                 shifts[worker["name"]] += 1
         
-        # Force-add workers if score not met
+        # Fallback mechanism
         while daily_score < min_daily_score:
             for worker in available_workers:
                 if worker["name"] not in daily_team:
@@ -37,70 +72,153 @@ def generate_fair_schedule(staff, min_daily_score=20, days_in_week=7):
     
     return schedule, shifts
 
-# ======== Streamlit UI ========
-st.set_page_config(page_title="AI Sjukhus Schemaläggare", layout="wide")
+# ========== HEADER SECTION ==========
+col1, col2 = st.columns([1, 4])
+with col1:
+    st.image("vardschema.png", width=150)  # Your custom logo
+with col2:
+    st.title("AI-Powered Staff Scheduling")
+    st.caption("Optimized Workforce Management for Healthcare Institutions")
 
-# Title and description
-st.title("⚕️ AI-drivet Schemaläggningssystem för Sjukhus")
-st.markdown("*Skapat för att automatisera personalplanering med rättvis fördelning och erfarenhetsbalans.*")
+# ========== INPUT SECTION ==========
+with st.expander("📋 How to Use This Tool", expanded=True):
+    st.markdown("""
+        1. **Add Staff** below using format: `Name, Experience (1-6)`
+        2. Set **Minimum Daily Experience** in sidebar
+        3. Click **Generate Schedule**
+        4. **Download** or **Share** your schedule
+    """)
 
-# Sidebar for inputs
-with st.sidebar:
-    st.header("Inställningar")
-    min_score = st.slider("Minsta erfarenhetspoäng per dag", 10, 30, 20)
-    uploaded_file = st.file_uploader("Ladda upp personaldata (Excel/CSV)", type=["csv", "xlsx"])
+input_col, preview_col = st.columns(2)
+with input_col:
+    st.subheader("➕ Add Staff Members")
+    input_text = st.text_area(
+        "Enter staff (one per line):",
+        height=200,
+        placeholder="Example:\nDr. Andersson,6\nNurse Berg,4\n...",
+        label_visibility="collapsed"
+    )
 
-# Load staff data
-if uploaded_file:
+# ========== DATA PROCESSING ==========
+staff = []
+if input_text:
     try:
-        if uploaded_file.name.endswith('.csv'):
-            staff_df = pd.read_csv(uploaded_file)
-        else:
-            staff_df = pd.read_excel(uploaded_file)
+        for line in input_text.split('\n'):
+            line = line.strip()
+            if line:
+                name, exp = line.rsplit(',', 1)
+                staff.append({
+                    "name": name.strip(),
+                    "experience": int(exp.strip())
+                })
         
-        # Validate required columns
-        if "name" not in staff_df.columns or "experience" not in staff_df.columns:
-            st.error("❌ Felaktig fil: CSV måste ha kolumnerna 'name' och 'experience'.")
-            st.stop()  # Halt execution
-        
-        staff = staff_df.to_dict('records')
-        
+        # Validation
+        if len(staff) == 0:
+            st.error("⚠️ Please add at least one staff member")
+            st.stop()
+            
+        invalid_exp = [m for m in staff if not 1 <= m["experience"] <= 6]
+        if invalid_exp:
+            st.error(f"❌ Invalid experience levels: {[m['name'] for m in invalid_exp]}")
+            st.stop()
+            
+        with preview_col:
+            st.subheader("👥 Team Preview")
+            preview_df = pd.DataFrame(staff)
+            st.dataframe(
+                preview_df.style.format({"experience": "⭐ {}"}),
+                use_container_width=True,
+                hide_index=True
+            )
+            
     except Exception as e:
-        st.error(f"❌ Kunde inte läsa fil: {str(e)}")
+        st.error(f"❌ Format error: {str(e)}\nPlease use format: Name, Experience")
         st.stop()
+
+# ========== CONTROLS ==========
+with st.sidebar:
+    st.header("⚙️ Settings")
+    min_score = st.slider("Minimum Daily Experience", 10, 30, 20, 
+                         help="Combined experience required per shift")
     
-    if st.button("Generera Schema med AI"):
-        with st.spinner("AI planerar ditt schema..."):
+    st.divider()
+    st.markdown("**Schedule Options**")
+    week_start = st.date_input("Week Starting", value="today")
+    enable_night_shift = st.checkbox("Include Night Shifts", True)
+
+# ========== SCHEDULE GENERATION ==========
+if st.button("🚀 Generate Schedule", use_container_width=True):
+    if not staff:
+        st.error("Please add staff members first")
+    else:
+        with st.spinner("🧠 Optimizing schedule using AI..."):
             schedule, shifts = generate_fair_schedule(staff, min_daily_score=min_score)
             
-            # Display schedule
-            days_se = ["Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag", "Lördag", "Söndag"]
+            # Schedule Display
+            st.success("✅ Schedule Generated Successfully!")
+            
+            # Convert to DataFrame
+            days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
             schedule_data = []
             for day in schedule:
                 schedule_data.append({
-                    "Dag": days_se[day],
-                    "Personal": ", ".join(schedule[day]["staff"]),
-                    "Erfarenhetspoäng": schedule[day]["score"]
+                    "Day": days[day],
+                    "Staff": ", ".join(schedule[day]["staff"]),
+                    "Total Experience": schedule[day]["score"]
                 })
             
-            st.success("✅ Schema genererat!")
-            st.dataframe(pd.DataFrame(schedule_data), use_container_width=True)
+            # Enhanced DataFrame display
+            schedule_df = pd.DataFrame(schedule_data)
+            st.dataframe(
+                schedule_df.style.applymap(lambda x: f"color: {THEME_COLOR}", subset=["Day"])
+                               .bar(subset=["Total Experience"], color=f"{THEME_COLOR}55"),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Staff": st.column_config.ListColumn(
+                        "Team Members",
+                        help="Optimized team composition for each shift"
+                    )
+                }
+            )
             
-            # Show shift distribution
-            st.subheader("Skiftfördelning")
-            fig, ax = plt.subplots()
-            ax.bar(shifts.keys(), shifts.values(), color='#1e88e5')
-            plt.xticks(rotation=45)
-            plt.ylabel("Antal Skift")
+            # Visualization
+            st.subheader("📊 Shift Distribution Analysis")
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.bar(shifts.keys(), shifts.values(), color=THEME_COLOR)
+            plt.title("Fairness Distribution Across Team Members", pad=20)
+            plt.xticks(rotation=45, ha='right')
+            plt.ylabel("Number of Shifts")
+            plt.grid(axis='y', linestyle='--', alpha=0.7)
             st.pyplot(fig)
             
-            # Download button
-            csv = pd.DataFrame(schedule_data).to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Ladda ner schema som CSV",
-                data=csv,
-                file_name='ai_genererat_schema.csv',
-                mime='text/csv'
-            )
-else:
-    st.info("ℹ️ Ladda upp en Excel/CSV-fil med personaldata för att börja.")
+            # Statistics Cards
+            total_shifts = sum(shifts.values())
+            avg_shifts = total_shifts / len(shifts)
+            fairness_score = 1 - (max(shifts.values()) - min(shifts.values())) / avg_shifts
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Shifts", total_shifts)
+            col2.metric("Average Shifts/Person", f"{avg_shifts:.1f}")
+            col3.metric("Fairness Score", f"{fairness_score:.0%}")
+            
+            # Export System
+            st.divider()
+            st.subheader("📤 Export Options")
+            
+            export_col1, export_col2 = st.columns(2)
+            with export_col1:
+                # CSV Download
+                csv = schedule_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name='hospital_schedule.csv',
+                    mime='text/csv',
+                    use_container_width=True
+                )
+            
+            with export_col2:
+                # Calendar Integration
+                if st.button("Add to Google Calendar", use_container_width=True):
+                    st.info("Calendar integration coming soon!")
