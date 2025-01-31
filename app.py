@@ -52,12 +52,22 @@ with st.sidebar:
 
 # Load staff data
 if uploaded_file:
-    if uploaded_file.name.endswith('.csv'):
-        staff_df = pd.read_csv(uploaded_file)
-    else:
-        staff_df = pd.read_excel(uploaded_file)
-    
-    staff = staff_df.to_dict('records')
+    try:
+        if uploaded_file.name.endswith('.csv'):
+            staff_df = pd.read_csv(uploaded_file)
+        else:
+            staff_df = pd.read_excel(uploaded_file)
+        
+        # Validate required columns
+        if "name" not in staff_df.columns or "experience" not in staff_df.columns:
+            st.error("❌ Felaktig fil: CSV måste ha kolumnerna 'name' och 'experience'.")
+            st.stop()  # Halt execution
+        
+        staff = staff_df.to_dict('records')
+        
+    except Exception as e:
+        st.error(f"❌ Kunde inte läsa fil: {str(e)}")
+        st.stop()
     
     if st.button("Generera Schema med AI"):
         with st.spinner("AI planerar ditt schema..."):
