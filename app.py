@@ -49,6 +49,10 @@ LANGUAGES = {
     }
 }
 
+with st.spinner("AI analyserar personalens kompetensprofil..."):
+    # Simulerar komplexa beräkningar
+    time.sleep(1.5)
+
 def initialize_session():
     if "staff" not in st.session_state:
         st.session_state.staff = []
