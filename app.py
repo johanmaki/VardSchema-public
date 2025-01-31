@@ -129,6 +129,72 @@ def generate_fair_schedule(staff, min_daily_score=20, days_in_week=7):
     
     return schedule, shifts
 
+def professional_visualizations(schedule, shifts, staff):
+    """Ny sektion för avancerade visualiseringar"""
+    
+    with st.expander("📈 Avancerad Analys", expanded=True):
+        tab1, tab2, tab3 = st.tabs(["Skiftfördelning", "Erfarenhetsnivåer", "Tidslinje"])
+        
+        with tab1:
+            # Interaktivt stapeldiagram
+            fig = px.bar(
+                x=list(shifts.keys()),
+                y=list(shifts.values()),
+                labels={"x": "Personal", "y": "Antal skift"},
+                title="Skiftfördelning per Person",
+                color=list(shifts.values()),
+                color_continuous_scale="Blues"
+            )
+            fig.update_layout(hovermode="x unified")
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with tab2:
+            # Cirkeldiagram för erfarenhetsnivåer
+            exp_data = pd.DataFrame(staff)
+            fig = px.pie(
+                exp_data,
+                names="experience",
+                title="Erfarenhetsfördelning i Teamet",
+                hole=0.3,
+                category_orders={"experience": [6,5,4,3,2,1]}
+            )
+            fig.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with tab3:
+            # Gantt-schema med tidslinje
+            schedule_df = pd.DataFrame([
+                {
+                    "Dag": days[i],
+                    "Start": datetime.now() + timedelta(days=i),
+                    "Slut": datetime.now() + timedelta(days=i+1),
+                    "Personal": ", ".join(schedule[i]["staff"]),
+                    "Poäng": schedule[i]["score"]
+                }
+                for i in range(7)
+            ])
+            
+            fig = px.timeline(
+                schedule_df,
+                x_start="Start",
+                x_end="Slut",
+                y="Dag",
+                color="Poäng",
+                title="Veckoschema Tidslinje",
+                hover_name="Personal",
+                color_continuous_scale="Viridis"
+            )
+            fig.update_yaxes(autorange="reversed")
+            st.plotly_chart(fig, use_container_width=True)
+            
+        # Exportknappar
+        st.download_button(
+            "📥 Ladda ner analys som PDF-rapport",
+            data=generate_pdf_report(schedule, shifts, staff),
+            file_name="schema_analys.pdf",
+            mime="application/pdf"
+        )
+
 def staff_input_section(lang):
     st.subheader(lang["add_staff"])
     col1, col2, col3 = st.columns([3, 2, 1])
@@ -148,6 +214,11 @@ def staff_input_section(lang):
                 st.session_state.staff.append({"name": name.strip(), "experience": exp})
             else:
                 st.error("Ange ett namn")
+
+def generate_pdf_report(schedule, shifts, staff):
+    """Platshållare för PDF-generering"""
+    # Implementera senare med ReportLab eller liknande
+    return b"PDF export kommer snart!"
 
 def staff_list_editor(lang):
     if st.session_state.staff:
@@ -242,6 +313,38 @@ def main():
                     file_name="schema.csv",
                     mime="text/csv"
                 )
+    if st.button("🚀 Generera schema", use_container_width=True):
+        if not st.session_state.staff:
+            st.error("Lägg till personal först")
+        else:
+            with st.spinner("🤖 AI optimerar ditt schema..."):
+                try:
+                    schedule, shifts = generate_fair_schedule(st.session_state.staff, min_score)
+                    st.success("✅ Schema genererat!")
+                    
+                    # Visa tabell
+                    schedule_df = pd.DataFrame([
+                        {"Dag": days[i], "Personal": ", ".join(schedule[i]["staff"]), "Poäng": schedule[i]["score"]}
+                        for i in range(7)
+                    ])
+                    
+                    # Professionell datatabell
+                    st.dataframe(
+                        schedule_df.style.background_gradient(subset=["Poäng"], cmap="Blues"),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Avancerade visualiseringar
+                    professional_visualizations(schedule, shifts, st.session_state.staff)
+                    
+                except ValueError as e:
+                    st.error(f"Schemaläggningsfel: {str(e)}")
+                    st.info("Tips: Öka antalet personal eller sänk minimikravet")
+                    
+                except Exception as e:
+                    st.error(f"Oväntat fel: {str(e)}")
+                    st.write("Logga detta fel och kontakta support")
 
 if __name__ == "__main__":
     main()
