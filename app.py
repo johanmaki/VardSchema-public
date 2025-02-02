@@ -51,8 +51,10 @@ LANGUAGES = {
 }
 
 with st.spinner("AI analyserar personalens kompetensprofil..."):
-    # Simulerar komplexa beräkningar
-    time.sleep(1.5)
+    # Simulera faktisk bearbetningstid
+    for i in range(3):
+        time.sleep(0.5)
+        st.spinner(f"Bearbetar... (steg {i+1}/3)")
 
 def initialize_session():
     if "staff" not in st.session_state:
@@ -287,6 +289,7 @@ def main():
             st.error("Lägg till personal först")
         else:
             with st.spinner("🤖 AI optimerar ditt schema..."):
+		time.sleep(1.5)
                 schedule, shifts = generate_fair_schedule(st.session_state.staff, min_score)
                 
                 st.success("✅ Schema genererat!")
