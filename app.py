@@ -289,7 +289,7 @@ def main():
             st.error("Lägg till personal först")
         else:
             with st.spinner("🤖 AI optimerar ditt schema..."):
-		time.sleep(1.5)
+time.sleep(1.5)
                 schedule, shifts = generate_fair_schedule(st.session_state.staff, min_score)
                 
                 st.success("✅ Schema genererat!")
