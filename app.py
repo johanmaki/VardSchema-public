@@ -93,8 +93,8 @@ def generate_fair_schedule(staff, min_daily_score=20, days_in_week=7):
     schedule = {day: {"staff": [], "score": 0} for day in range(days_in_week)}
     
     total_experience = sum(m["experience"] for m in staff)
-    if total_experience < min_daily_score * days_in_week:
-        raise ValueError(f"Otillräcklig total erfarenhet ({total_experience}). Krävs minst 2")
+    if total_experience < min_daily_score:
+        raise ValueError(f"Otillräcklig total erfarenhet ({total_experience}). Krävs minst " +min_daily_score+".")
 
     for day in schedule:
         daily_team = []
