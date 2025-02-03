@@ -289,9 +289,8 @@ def main():
             st.error("Lägg till personal först")
         else:
             with st.spinner("🤖 AI optimerar ditt schema..."):
-time.sleep(1.5)
-                schedule, shifts = generate_fair_schedule(st.session_state.staff, min_score)
-                
+                time.sleep(1.5)  # <-- Lägg till mellanslag/mellanslag här
+                schedule, shifts = generate_fair_schedule(staff, min_score)
                 st.success("✅ Schema genererat!")
                 days = ["Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag", "Lördag", "Söndag"]
                 schedule_df = pd.DataFrame([
