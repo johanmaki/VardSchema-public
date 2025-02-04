@@ -195,7 +195,7 @@ def main():
     st.markdown(get_css(), unsafe_allow_html=True)
     
     # Instruktioner
-    with st.expander("❓ Hur använder jag detta verktyg?", expanded=True):
+    with st.expander("❓ Hur använder jag detta verktyg? :)", expanded=True):
         st.markdown("""
         1. **Lägg till personal** med formuläret nedan
         2. Justera inställningar i sidofältet
