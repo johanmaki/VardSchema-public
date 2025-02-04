@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime
+from database import save_employee_prefs
 
 # ========== KONFIGURATION ==========
 PREFERENCE_COLUMNS = [
@@ -146,6 +147,31 @@ def show():
     if st.session_state.user_type != "anställd":
         st.error("🔐 Du har inte behörighet att visa denna sida")
         st.stop()
+
+    with st.form(key="preferences_form"):
+        st.subheader("📋 Schemapreferenser")
+        
+        # Lägg till erfarenhetsnivå
+        experience = st.selectbox(
+            "Erfarenhetsnivå",
+            options=list(range(1, 7)),
+            format_func=lambda x: f"Nivå {x}",
+            help="Välj din nuvarande kompetensnivå"
+        )
+
+        if st.form_submit_button("💾 Spara preferenser"):
+            prefs = {
+                "hospital": st.session_state.hospital,
+                "name": user_name.strip(),
+                "workload": workload,
+                "work_types": work_types,
+                "max_consec_days": max_consecutive_days,
+                "min_days_off": min_days_off,
+                "experience": experience
+            }
+            save_employee_prefs(prefs)
+            st.success("✅ Preferenser sparade!")
+            st.balloons()
 
     # Konfigurera sidlayout
     st.set_page_config(page_title="Anställdsida", layout="centered")
