@@ -1,4 +1,7 @@
 # pages/2_Anstalld.py
+# Följande rad måste vara högst upp
+st.set_page_config(page_title="Anställdsida", layout="centered")
+
 import streamlit as st
 import pandas as pd
 import os
@@ -146,9 +149,6 @@ def show():
     if st.session_state.user_type != "anställd":
         st.error("🔐 Du har inte behörighet att visa denna sida")
         st.stop()
-
-    # Konfigurera sidlayout
-    st.set_page_config(page_title="Anställdsida", layout="centered")
     
     # Visa huvudgränssnitt
     main_employee_interface()
