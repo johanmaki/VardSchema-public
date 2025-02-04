@@ -175,9 +175,6 @@ def show():
             save_employee_prefs(prefs)
             st.success("✅ Preferenser sparade!")
             st.balloons()
-
-    # Konfigurera sidlayout
-    st.set_page_config(page_title="Anställdsida", layout="centered")
     
     # Visa huvudgränssnitt
     main_employee_interface()
