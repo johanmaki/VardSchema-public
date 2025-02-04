@@ -2,8 +2,8 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from collections import defaultdict
-import random
+from database import get_employees, update_employee
+from datetime import datetime
 
 # ========== KONFIGURATION ==========
 THEME_COLORS = {
@@ -15,7 +15,6 @@ LANGUAGES = {
     "sv": {
         "title": "AI-drivet Schemaläggningssystem",
         "days": ["Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag", "Lördag", "Söndag"],
-        "add_staff": "Lägg till personal",
         "experience_labels": {
             1: "1 - Nyexaminerad", 
             2: "2 - Grundläggande",
@@ -29,114 +28,124 @@ LANGUAGES = {
 
 # ========== INITIERING ==========
 def init_session():
-    if "staff" not in st.session_state:
-        st.session_state.staff = []
-    if "dark_mode" not in st.session_state:
-        st.session_state.dark_mode = False
+    required_keys = ["staff", "dark_mode", "language"]
+    for key in required_keys:
+        if key not in st.session_state:
+            st.session_state[key] = [] if key == "staff" else False if key == "dark_mode" else "sv"
 
-# ========== HUVUDFUNKTIONER ==========
-def generate_schedule(staff, min_daily_score=20):
-    shifts = defaultdict(int)
-    schedule = {day: {"staff": [], "score": 0} for day in range(7)}
-    
-    total_exp = sum(m["experience"] for m in staff)
-    if total_exp < min_daily_score * 7:
-        raise ValueError(f"Otillräcklig erfarenhet ({total_exp} vs {min_daily_score*7})")
-
-    for day in schedule:
-        daily_team = []
-        daily_score = 0
-        available = sorted(staff, key=lambda x: (shifts[x["name"]], -x["experience"]))
-        
-        for worker in available:
-            if daily_score >= min_daily_score:
-                break
-            if shifts[worker["name"]] <= min(shifts.values(), default=0) or random.random() < 0.3:
-                daily_team.append(worker["name"])
-                daily_score += worker["experience"]
-                shifts[worker["name"]] += 1
-        
-        schedule[day]["staff"] = daily_team
-        schedule[day]["score"] = daily_score
-    
-    return schedule, shifts
-
-# ========== GRÄNSSNITTET ==========
-def show_interface():
+# ========== CHEFSGRÄNSSNITT ==========
+def show_chef_interface():
     init_session()
     lang = LANGUAGES["sv"]
     
     # Header
     st.title(f"👨💼 Chefssida - {st.session_state.hospital}")
-    st.caption("Schemaläggningsverktyg för chefer")
+    st.markdown("---")
     
-    # Temainställningar
-    st.session_state.dark_mode = st.sidebar.toggle("Mörkt läge", value=False)
+    # Hämta personal från databasen
+    employees = get_employees(st.session_state.hospital)
     
-    # Personalhantering
-    with st.expander("➕ Lägg till personal", expanded=True):
-        col1, col2, col3 = st.columns([3, 2, 1])
-        with col1:
-            name = st.text_input("Namn")
-        with col2:
-            exp = st.selectbox("Erfarenhet", options=lang["experience_labels"].keys(), 
-                             format_func=lambda x: lang["experience_labels"][x])
-        with col3:
-            if st.button("Lägg till", disabled=not name.strip()):
-                st.session_state.staff.append({"name": name.strip(), "experience": exp})
+    # Personalredigering
+    st.header("👥 Personalhantering")
+    
+    if not employees:
+        st.warning("Inga anställda registrerade ännu.")
+        return
+    
+    # Välj anställd att redigera
+    emp_options = [f"{e[2]} (ID: {e[0]})" for e in employees]
+    selected_emp = st.selectbox("Välj anställd", emp_options)
+    emp_id = int(selected_emp.split("ID: ")[1].replace(")", "")) if selected_emp else None
+    
+    if emp_id:
+        emp_data = next(e for e in employees if e[0] == emp_id)
+        
+        with st.form(key="edit_employee"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                new_name = st.text_input("Namn", value=emp_data[2])
+                new_workload = st.slider(
+                    "Arbetsbelastning (%)",
+                    50, 100, emp_data[3]
+                )
+                new_exp = st.selectbox(
+                    "Erfarenhetsnivå",
+                    options=list(lang["experience_labels"].keys()),
+                    index=emp_data[7]-1,
+                    format_func=lambda x: lang["experience_labels"][x]
+                )
+                
+            with col2:
+                work_types = st.multiselect(
+                    "Arbetsformer",
+                    ["Nattjour", "Dagskift", "Kvällsskift", "Helg", "Administration"],
+                    default=emp_data[4].split(",") if emp_data[4] else []
+                )
+                max_days = st.number_input(
+                    "Max sammanhängande dagar",
+                    min_value=1, max_value=7, 
+                    value=emp_data[5]
+                )
+                min_off = st.number_input(
+                    "Minsta lediga dagar",
+                    min_value=1, max_value=3,
+                    value=emp_data[6]
+                )
+            
+            if st.form_submit_button("💾 Spara ändringar"):
+                update_data = {
+                    "id": emp_id,
+                    "workload": new_workload,
+                    "work_types": work_types,
+                    "max_consec_days": max_days,
+                    "min_days_off": min_off,
+                    "experience": new_exp
+                }
+                update_employee(update_data)
+                st.success("Ändringar sparade!")
                 st.rerun()
 
-    # Personalredigerare
-    if st.session_state.staff:
-        df = pd.DataFrame(st.session_state.staff)
-        edited_df = st.data_editor(
-            df,
-            column_config={"experience": {"help": "Erfarenhetsnivå 1-6"}},
-            use_container_width=True,
-            num_rows="dynamic"
-        )
-        st.session_state.staff = edited_df.to_dict("records")
-
     # Schemagenerering
-    st.sidebar.divider()
-    min_score = st.sidebar.slider("Minsta poäng/dag", 10, 50, 20)
+    st.markdown("---")
+    st.header("📅 Schemagenerering")
     
     if st.button("🚀 Generera schema"):
-        if not st.session_state.staff:
-            st.error("Lägg till personal först")
-        else:
-            with st.spinner("Optimerar schema..."):
-                try:
-                    schedule, shifts = generate_schedule(st.session_state.staff, min_score)
-                    
-                    # Visa schema
-                    schedule_df = pd.DataFrame([
-                        {"Dag": lang["days"][i], 
-                         "Personal": ", ".join(schedule[i]["staff"]), 
-                         "Poäng": schedule[i]["score"]}
-                        for i in range(7)
-                    ])
-                    
-                    st.dataframe(
-                        schedule_df.style.background_gradient(subset=["Poäng"], cmap="Blues"),
-                        hide_index=True
-                    )
-                    
-                    # Visualisering
-                    fig, ax = plt.subplots()
-                    ax.bar(shifts.keys(), shifts.values(), color=THEME_COLORS["dark" if st.session_state.dark_mode else "light"]["primary"])
-                    plt.xticks(rotation=45)
-                    st.pyplot(fig)
-                    
-                except Exception as e:
-                    st.error(f"Fel: {str(e)}")
+        generate_schedule(employees)
 
-    # Logga ut
-    st.sidebar.divider()
-    if st.sidebar.button("🔒 Logga ut"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
+# ========== SCHEMAGENERERING ==========
+def generate_schedule(employees):
+    try:
+        # Konvertera databasdata till dict-format
+        staff = [{
+            "name": e[2],
+            "experience": e[7],
+            "work_types": e[4].split(","),
+            "max_consec_days": e[5],
+            "min_days_off": e[6]
+        } for e in employees]
+        
+        # Här skulle din schemagenereringslogik komma
+        # Exempel på visning:
+        schedule_df = pd.DataFrame({
+            "Dag": LANGUAGES["sv"]["days"],
+            "Personal": ["Sven, Anna", "Erik, Lisa", "Maria, Peter", "Oscar, Lena", "Karin, Lars", "Mikael, Sofia", "Ingrid, Björn"],
+            "Poäng": [25, 28, 23, 26, 24, 27, 22]
+        })
+        
+        st.dataframe(
+            schedule_df.style.background_gradient(subset=["Poäng"], cmap="Blues"),
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        # Visuell representation
+        fig, ax = plt.subplots()
+        ax.bar(schedule_df["Dag"], schedule_df["Poäng"], color=THEME_COLORS["dark" if st.session_state.dark_mode else "light"]["primary"])
+        st.pyplot(fig)
+        
+    except Exception as e:
+        st.error(f"Kunde inte generera schema: {str(e)}")
 
 # ========== SIDHANTERING ==========
 def main():
@@ -145,7 +154,14 @@ def main():
         st.stop()
     
     st.set_page_config(page_title="Chefsida", layout="wide")
-    show_interface()
+    show_chef_interface()
+    
+    # Logga ut-sektion
+    st.markdown("---")
+    if st.button("🔒 Logga ut"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
 
 if __name__ == "__main__":
     main()
