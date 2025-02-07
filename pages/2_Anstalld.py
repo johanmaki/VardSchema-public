@@ -1,7 +1,7 @@
 # pages/2_Anstalld.py
 
-import pandas as pd
 import os
+import pandas as pd
 import streamlit as st
 from datetime import datetime
 from database import save_employee_prefs
@@ -24,7 +24,6 @@ def save_preferences(data):
         os.makedirs("preferences", exist_ok=True)
         filename = f"preferences/{st.session_state.hospital}_preferenser.csv"
         
-        # Skapa ny DataFrame med aktuella data
         new_data = pd.DataFrame([{
             "Datum": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "Sjukhus": st.session_state.hospital,
@@ -34,8 +33,7 @@ def save_preferences(data):
             "Max sammanhängande dagar": data["max_consecutive_days"],
             "Minsta lediga dagar": data["min_days_off"]
         }])
-
-        # Lägg till i befintlig fil eller skapa ny
+        
         if os.path.exists(filename):
             existing_data = pd.read_csv(filename)
             updated_data = pd.concat([existing_data, new_data], ignore_index=True)
@@ -48,12 +46,12 @@ def save_preferences(data):
         st.error(f"Fel vid sparande: {str(e)}")
         return False
 
-# ========== HUVUDGRÄNSSNITT ==========
 def main_employee_interface():
-    """Huvudgränssnitt för anställda"""
+    """Huvudgränssnitt för anställda - sparar grundläggande preferenser."""
     st.title(f"🧑⚕️ Anställdsida - {st.session_state.hospital}")
     st.markdown("---")
 
+    # Grundformulär med unikt key
     with st.form(key="preferences_form_basic"):
         st.subheader("📋 Schemapreferenser")
 
@@ -64,15 +62,18 @@ def main_employee_interface():
                 "Ditt namn",
                 help="Ange ditt fullständiga namn för identifiering"
             )
-        
-        # Arbetsönskemål
+        # Spara värdet i session_state för senare användning
+        st.session_state.user_name = user_name
+
+        # Arbetsinställningar
         st.markdown("### 🎚️ Arbetsinställningar")
         workload = st.slider(
             "Önskad arbetsbelastning (%)",
             50, 100, 75,
             help="Välj hur många procent av full arbetstid du önskar arbeta denna vecka"
         )
-        
+        st.session_state.workload = workload
+
         # Arbetsformspreferenser
         work_types = st.multiselect(
             "Prioriterade arbetsformer",
@@ -80,6 +81,7 @@ def main_employee_interface():
             default=["Dagskift"],
             help="Välj de arbetsformer du föredrar (flerval möjligt)"
         )
+        st.session_state.work_types = work_types
 
         # Begränsningar
         st.markdown("### ⚠️ Begränsningar")
@@ -92,6 +94,7 @@ def main_employee_interface():
                 value=5,
                 help="Max antal dagar i rad du kan arbeta"
             )
+            st.session_state.max_consecutive_days = max_consecutive_days
         with col2:
             min_days_off = st.number_input(
                 "Minsta antal lediga dagar/vecka",
@@ -100,20 +103,20 @@ def main_employee_interface():
                 value=2,
                 help="Minsta antal dagar du måste ha ledigt per vecka"
             )
+            st.session_state.min_days_off = min_days_off
 
-        # Submit-knapp
         if st.form_submit_button("💾 Spara preferenser"):
-            if not user_name.strip():
+            if not st.session_state.user_name.strip():
                 st.error("Vänligen ange ditt namn")
             else:
-                success = save_preferences({
-                    "name": user_name.strip(),
-                    "workload": workload,
-                    "work_types": work_types,
-                    "max_consecutive_days": max_consecutive_days,
-                    "min_days_off": min_days_off
-                })
-                if success:
+                data = {
+                    "name": st.session_state.user_name.strip(),
+                    "workload": st.session_state.workload,
+                    "work_types": st.session_state.work_types,
+                    "max_consecutive_days": st.session_state.max_consecutive_days,
+                    "min_days_off": st.session_state.min_days_off
+                }
+                if save_preferences(data):
                     st.success("✅ Dina preferenser har sparats!")
                     st.balloons()
 
@@ -124,7 +127,8 @@ def main_employee_interface():
         filename = f"preferences/{st.session_state.hospital}_preferenser.csv"
         if os.path.exists(filename):
             history_df = pd.read_csv(filename)
-            history_df = history_df[history_df["Användarnamn"] == user_name.strip()]
+            if "user_name" in st.session_state and st.session_state.user_name:
+                history_df = history_df[history_df["Användarnamn"] == st.session_state.user_name.strip()]
             if not history_df.empty:
                 st.dataframe(
                     history_df.sort_values("Datum", ascending=False),
@@ -138,7 +142,31 @@ def main_employee_interface():
     except Exception as e:
         st.error(f"Kunde inte ladda historik: {str(e)}")
 
-# ========== SIDHANTERING ==========
+def experience_form():
+    """Formulär för extra preferenser (t.ex. erfarenhetsnivå) med egen key."""
+    with st.form(key="preferences_form_experience"):
+        st.subheader("📋 Lägg till extra preferenser")
+        experience = st.selectbox(
+            "Erfarenhetsnivå",
+            options=list(range(1, 7)),
+            format_func=lambda x: f"Nivå {x}",
+            help="Välj din nuvarande kompetensnivå"
+        )
+        if st.form_submit_button("💾 Spara extra preferenser"):
+            # Skapa en ordbok med samtliga värden, inklusive de som redan sparats i session_state
+            prefs = {
+                "hospital": st.session_state.hospital,
+                "name": st.session_state.user_name.strip() if "user_name" in st.session_state else "",
+                "workload": st.session_state.workload,
+                "work_types": st.session_state.work_types,
+                "max_consecutive_days": st.session_state.max_consecutive_days,
+                "min_days_off": st.session_state.min_days_off,
+                "experience": experience
+            }
+            save_employee_prefs(prefs)
+            st.success("✅ Extra preferenser sparade!")
+            st.balloons()
+
 def show():
     """Huvudfunktion för sidvisning"""
     # Autentiseringskontroll
@@ -149,32 +177,9 @@ def show():
         st.error("🔐 Du har inte behörighet att visa denna sida")
         st.stop()
 
-    with st.form(key="preferences_form_experience"):
-        st.subheader("📋 Schemapreferenser")
-        
-        # Lägg till erfarenhetsnivå
-        experience = st.selectbox(
-            "Erfarenhetsnivå",
-            options=list(range(1, 7)),
-            format_func=lambda x: f"Nivå {x}",
-            help="Välj din nuvarande kompetensnivå"
-        )
-
-        if st.form_submit_button("💾 Spara preferenser"):
-            prefs = {
-                "hospital": st.session_state.hospital,
-                "name": user_name.strip(),
-                "workload": workload,
-                "work_types": work_types,
-                "max_consec_days": max_consecutive_days,
-                "min_days_off": min_days_off,
-                "experience": experience
-            }
-            save_employee_prefs(prefs)
-            st.success("✅ Preferenser sparade!")
-            st.balloons()
-    
-    # Visa huvudgränssnitt
+    # Visa formulär för extra preferenser
+    experience_form()
+    # Visa huvudgränssnittet med grundläggande preferenser
     main_employee_interface()
 
     # Logga ut-sektion
