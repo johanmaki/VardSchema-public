@@ -1,8 +1,5 @@
 # pages/2_Anstalld.py
-# Följande rad måste vara högst upp
-st.set_page_config(page_title="Anställdsida", layout="centered")
 
-import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime
