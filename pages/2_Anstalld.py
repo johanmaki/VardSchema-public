@@ -54,7 +54,7 @@ def main_employee_interface():
     st.title(f"🧑⚕️ Anställdsida - {st.session_state.hospital}")
     st.markdown("---")
 
-    with st.form(key="preferences_form"):
+    with st.form(key="preferences_form_basic"):
         st.subheader("📋 Schemapreferenser")
 
         # Användarinformation
@@ -149,7 +149,7 @@ def show():
         st.error("🔐 Du har inte behörighet att visa denna sida")
         st.stop()
 
-    with st.form(key="preferences_form"):
+    with st.form(key="preferences_form_experience"):
         st.subheader("📋 Schemapreferenser")
         
         # Lägg till erfarenhetsnivå
