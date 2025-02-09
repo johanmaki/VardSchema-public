@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
+import random
 from database import get_employees, update_employee
 from datetime import datetime
 
@@ -45,102 +46,111 @@ def show_chef_interface():
     # Hämta personal från databasen
     employees = get_employees(st.session_state.hospital)
     
-    # Personalredigering
     st.header("👥 Personalhantering")
     
     if not employees:
         st.warning("Inga anställda registrerade ännu.")
         return
     
-    # Välj anställd att redigera
-    emp_options = [f"{e[2]} (ID: {e[0]})" for e in employees]
-    selected_emp = st.selectbox("Välj anställd", emp_options)
-    emp_id = int(selected_emp.split("ID: ")[1].replace(")", "")) if selected_emp else None
+    # Konvertera employee-listan till en DataFrame
+    # Förväntade index: 0: ID, 2: Namn, 3: Arbetsbelastning, 4: Arbetsformer (sträng), 5: Max dagar, 6: Min lediga, 7: Erfarenhet
+    df = pd.DataFrame(employees, columns=["ID", "Col1", "Namn", "Arbetsbelastning (%)", "Arbetsformer", "Max sammanhängande dagar", "Minsta lediga dagar", "Erfarenhet"])
+    if "Col1" in df.columns:
+        df.drop(columns=["Col1"], inplace=True)
+    df["Erfarenhet"] = df["Erfarenhet"].astype(int)
     
-    if emp_id:
-        emp_data = next(e for e in employees if e[0] == emp_id)
-        
-        with st.form(key="edit_employee"):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                new_name = st.text_input("Namn", value=emp_data[2])
-                new_workload = st.slider(
-                    "Arbetsbelastning (%)",
-                    50, 100, emp_data[3]
-                )
-                new_exp = st.selectbox(
-                    "Erfarenhetsnivå",
-                    options=list(lang["experience_labels"].keys()),
-                    index=emp_data[7]-1,
-                    format_func=lambda x: lang["experience_labels"][x]
-                )
-                
-            with col2:
-                work_types = st.multiselect(
-                    "Arbetsformer",
-                    ["Nattjour", "Dagskift", "Kvällsskift", "Helg", "Administration"],
-                    default=emp_data[4].split(",") if emp_data[4] else []
-                )
-                max_days = st.number_input(
-                    "Max sammanhängande dagar",
-                    min_value=1, max_value=7, 
-                    value=emp_data[5]
-                )
-                min_off = st.number_input(
-                    "Minsta lediga dagar",
-                    min_value=1, max_value=3,
-                    value=emp_data[6]
-                )
-            
-            if st.form_submit_button("💾 Spara ändringar"):
-                update_data = {
-                    "id": emp_id,
-                    "workload": new_workload,
-                    "work_types": work_types,
-                    "max_consec_days": max_days,
-                    "min_days_off": min_off,
-                    "experience": new_exp
-                }
-                update_employee(update_data)
-                st.success("Ändringar sparade!")
-                st.rerun()
-
-    # Schemagenerering
+    st.write("Redigera anställdas preferenser nedan:")
+    edited_df = st.experimental_data_editor(
+        df,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="employee_editor"
+    )
+    
+    if st.button("💾 Spara ändringar"):
+        for _, row in edited_df.iterrows():
+            update_data = {
+                "id": int(row["ID"]),
+                "workload": int(row["Arbetsbelastning (%)"]),
+                "work_types": row["Arbetsformer"],
+                "max_consec_days": int(row["Max sammanhängande dagar"]),
+                "min_days_off": int(row["Minsta lediga dagar"]),
+                "experience": int(row["Erfarenhet"])
+            }
+            update_employee(update_data)
+        st.success("Ändringar sparade!")
+        st.experimental_rerun()
+    
     st.markdown("---")
-    st.header("📅 Schemagenerering")
+    # Informationsknapp för erfarenhetsnivåer
+    if st.button("ℹ️ Vad betyder erfarenhetsnivåerna?"):
+        st.info(
+            f"""
+            **Erfarenhetsnivåer:**
+            - **1 - Nyexaminerad:** Ingen eller minimal erfarenhet.
+            - **2 - Grundläggande:** Har viss grundläggande erfarenhet, men behöver mycket handledning.
+            - **3 - Erfaren:** Klarar de flesta arbetsuppgifter självständigt.
+            - **4 - Mycket erfaren:** Kan hantera komplexa uppgifter och axla ledningsansvar.
+            - **5 - Expert:** Har djupgående kunskaper och kan agera som mentor.
+            - **6 - Avdelningsansvarig:** Leder teamet och tar strategiska beslut.
+            """
+        )
     
+    st.markdown("---")
+    # Schemagenerering
+    st.header("📅 Schemagenerering")
     if st.button("🚀 Generera schema"):
-        generate_schedule(employees)
+        # Hämta de eventuellt uppdaterade preferenserna från databasen
+        updated_employees = get_employees(st.session_state.hospital)
+        generate_schedule(updated_employees)
 
 # ========== SCHEMAGENERERING ==========
 def generate_schedule(employees):
     try:
-        # Konvertera databasdata till dict-format
+        # Konvertera anställdas data till en lista med dicts
         staff = [{
             "name": e[2],
-            "experience": e[7],
-            "work_types": e[4].split(","),
-            "max_consec_days": e[5],
-            "min_days_off": e[6]
+            "experience": int(e[7]),
+            "work_types": e[4].split(",") if e[4] else [],
+            "max_consec_days": int(e[5]),
+            "min_days_off": int(e[6])
         } for e in employees]
         
-        # Här skulle din schemagenereringslogik komma
-        # Exempel på visning:
-        schedule_df = pd.DataFrame({
-            "Dag": LANGUAGES["sv"]["days"],
-            "Personal": ["Sven, Anna", "Erik, Lisa", "Maria, Peter", "Oscar, Lena", "Karin, Lars", "Mikael, Sofia", "Ingrid, Björn"],
-            "Poäng": [25, 28, 23, 26, 24, 27, 22]
-        })
+        # Kontroll: minst en anställd måste ha erfarenhet >= 4
+        if not any(emp["experience"] >= 4 for emp in staff):
+            st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre för att utse en ledningsansvarig.")
+            return
         
+        # Dummy-schemagenerering: för varje dag i veckan, välj en ledare bland de med erfarenhet >= 4
+        days = LANGUAGES["sv"]["days"]
+        schedule_data = []
+        eligible = [emp for emp in staff if emp["experience"] >= 4]
+        # För att jämnt fördela ledarskapet kan vi rotera listan
+        random.shuffle(eligible)
+        for i, day in enumerate(days):
+            if eligible:
+                leader = eligible[i % len(eligible)]
+                leader_name = f"{leader['name']} ★"
+            else:
+                leader_name = "Ingen ledare"
+            # I en riktig implementation skulle personalen för varje pass väljas utifrån fler kriterier
+            all_staff = ", ".join([emp["name"] for emp in staff])
+            schedule_data.append({
+                "Dag": day,
+                "Ledningsansvarig": leader_name,
+                "Personal": all_staff
+            })
+        
+        schedule_df = pd.DataFrame(schedule_data)
         st.dataframe(
-            schedule_df.style.background_gradient(subset=["Poäng"], cmap="Blues"),
+            schedule_df.style.background_gradient(subset=["Ledningsansvarig"], cmap="YlGnBu"),
             hide_index=True,
             use_container_width=True
         )
         
-        # Visuell representation
+        # Visuell representation (exempel med dummy-poäng)
         fig, ax = plt.subplots()
+        schedule_df["Poäng"] = schedule_df["Personal"].apply(lambda x: len(x))  # dummy-poäng
         ax.bar(schedule_df["Dag"], schedule_df["Poäng"], color=THEME_COLORS["dark" if st.session_state.dark_mode else "light"]["primary"])
         st.pyplot(fig)
         
@@ -156,7 +166,6 @@ def main():
     st.set_page_config(page_title="Chefsida", layout="wide")
     show_chef_interface()
     
-    # Logga ut-sektion
     st.markdown("---")
     if st.button("🔒 Logga ut"):
         for key in list(st.session_state.keys()):
