@@ -149,12 +149,12 @@ def generate_schedule(employees):
             "max_consec_days": e[5],
             "min_days_off": e[6]
         } for e in employees]
-        
+
         # Kontroll: minst en anställd måste ha erfarenhet >= 4
         if not any(emp["experience"] >= 4 for emp in staff):
             st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre för att utse en ledningsansvarig.")
             return
-        
+
         # Dummy-schemagenerering: för varje dag, välj en ledare bland de med erfarenhet >= 4
         days = LANGUAGES["sv"]["days"]
         schedule_data = []
@@ -169,14 +169,23 @@ def generate_schedule(employees):
                 "Ledningsansvarig": leader_name,
                 "Personal": all_staff
             })
-        
+
         schedule_df = pd.DataFrame(schedule_data)
         st.dataframe(
             schedule_df.style.background_gradient(subset=["Ledningsansvarig"], cmap="YlGnBu"),
             hide_index=True,
             use_container_width=True
         )
-        
+
         # Visuell representation (exempel med dummy-poäng)
         fig, ax = plt.subplots()
-        schedule_df["Poäng"] = schedule_df["Personal"].apply(lambda x: len(x))  # dummy-poäng\n        ax.bar(schedule_df["Dag"], schedule_df["Poäng"], color=THEME_COLORS[\"dark\" if st.session_state.dark_mode else \"light\"][\"primary\"])\n        st.pyplot(fig)\n\n    except Exception as e:\n        st.error(f\"Kunde inte generera schema: {str(e)}\")\n\n# ========== SIDHANTERING ==========\ndef main():\n    init_session()\n\n    # Om användaren inte är inloggad som chef, visa en knapp för att logga in som chef\n    if st.session_state.user_type != \"chef\":\n        if st.button(\"Logga in som chef\"):\n            st.session_state.user_type = \"chef\"\n            st.experimental_rerun()\n        else:\n            st.error(\"Åtkomst nekad. Klicka på 'Logga in som chef' för att fortsätta.\")\n            return\n\n    # Om vi är inloggade som chef, visa chefsgränssnittet\n    show_chef_interface()\n\n    st.markdown(\"---\")\n    if st.button(\"🔒 Logga ut\"):\n        for key in list(st.session_state.keys()):\n            del st.session_state[key]\n        st.experimental_rerun()\n\nif __name__ == \"__main__\":\n    main()\n"
+        schedule_df["Poäng"] = schedule_df["Personal"].apply(lambda x: len(x))  # dummy-poäng
+        ax.bar(
+            schedule_df["Dag"],
+            schedule_df["Poäng"],
+            color=THEME_COLORS["dark" if st.session_state.dark_mode else "light"]["primary"]
+        )
+        st.pyplot(fig)
+
+    except Exception as e:
+        st.error(f"Kunde inte generera schema: {str(e)}")
