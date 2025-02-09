@@ -31,6 +31,11 @@ LANGUAGES = {
 
 # ========== INITIERING ==========
 def init_session():
+ 
+    if "user_type" not in st.session_state or st.session_state.user_type != "chef":
+    st.error("Åtkomst nekad. Du är inte inloggad som chef.")
+    st.stop()
+
     required_keys = ["staff", "dark_mode", "language", "user_type", "hospital"]
     for key in required_keys:
         if key not in st.session_state:
