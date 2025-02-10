@@ -149,7 +149,7 @@ def show_chef_interface():
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         # Redirect via meta-refresh (ändra URL:en om du har en annan inloggningssida)
-        st.markdown("<meta http-equiv='refresh' content='0; url=/' />", unsafe_allow_html=True)
+        st.markdown("<meta http-equiv='refresh' content='0; url=https://vardschema.streamlit.app/' />", unsafe_allow_html=True)
         st.stop()
 
 # ========== SCHEMAGENERERING ==========
