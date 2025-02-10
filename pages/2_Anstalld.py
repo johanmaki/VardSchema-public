@@ -111,12 +111,17 @@ def main_employee_interface():
                 st.error("Vänligen ange ditt namn")
             else:
                 data = {
+                    "hospital": st.session_state.hospital,
                     "name": st.session_state.user_name.strip(),
                     "workload": st.session_state.workload,
                     "work_types": st.session_state.work_types,
                     "max_consecutive_days": st.session_state.max_consecutive_days,
-                    "min_days_off": st.session_state.min_days_off
+                    "min_days_off": st.session_state.min_days_off,
+                    "experience": 1  # Standardvärde för en ny anställd
                 }
+                # Spara till databasen så att chefsidan kan läsa informationen
+                save_employee_prefs(data)
+                # Spara även till CSV för historikvisning
                 if save_preferences(data):
                     st.success("✅ Dina preferenser har sparats!")
                     st.balloons()
