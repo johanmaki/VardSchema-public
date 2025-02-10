@@ -35,17 +35,26 @@ def save_employee_prefs(data):
                      workload=?, work_types=?, max_consec_days=?,
                      min_days_off=?, experience=?, last_updated=?
                      WHERE id=?''',
-                  (data["workload"], ",".join(data["work_types"]),
-                   data["max_consec_days"], data["min_days_off"],
-                   data["experience"], datetime.now(), exists[0]))
+                  (data["workload"],
+                   ",".join(data["work_types"]),
+                   data["max_consecutive_days"],
+                   data["min_days_off"],
+                   data["experience"],
+                   datetime.now(),
+                   exists[0]))
     else:
         c.execute('''INSERT INTO employees 
                      (hospital, name, workload, work_types, 
                       max_consec_days, min_days_off, experience, last_updated)
                      VALUES (?,?,?,?,?,?,?,?)''',
-                  (data["hospital"], data["name"], data["workload"],
-                   ",".join(data["work_types"]), data["max_consec_days"],
-                   data["min_days_off"], data["experience"], datetime.now()))
+                  (data["hospital"],
+                   data["name"],
+                   data["workload"],
+                   ",".join(data["work_types"]),
+                   data["max_consecutive_days"],
+                   data["min_days_off"],
+                   data["experience"],
+                   datetime.now()))
     
     conn.commit()
     conn.close()
@@ -66,9 +75,13 @@ def update_employee(data):
                  workload=?, work_types=?, max_consec_days=?,
                  min_days_off=?, experience=?, last_updated=?
                  WHERE id=?''',
-              (data["workload"], ",".join(data["work_types"]),
-               data["max_consec_days"], data["min_days_off"],
-               data["experience"], datetime.now(), data["id"]))
+              (data["workload"],
+               ",".join(data["work_types"]),
+               data["max_consecutive_days"],
+               data["min_days_off"],
+               data["experience"],
+               datetime.now(),
+               data["id"]))
     conn.commit()
     conn.close()
 
