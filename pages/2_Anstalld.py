@@ -143,12 +143,12 @@ def show_chef_interface():
         generate_schedule(employees)
     
     st.markdown("---")
-    # Utloggningsknapp med redirect till startsidan
+    # Utloggningsknapp med redirect till inloggningssidan (ändra '/login' till den URL där din inloggningssida finns)
     if st.button("🚪 Logga ut"):
         # Rensa session state
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-        # Redirect med hjälp av en meta refresh
+        # Redirect via meta-refresh (ändra URL:en om du har en annan inloggningssida)
         st.markdown("<meta http-equiv='refresh' content='0; url=/' />", unsafe_allow_html=True)
         st.stop()
 
