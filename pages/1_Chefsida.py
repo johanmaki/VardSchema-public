@@ -31,10 +31,12 @@ LANGUAGES = {
 
 # ========== INITIERING ==========
 def init_session():
-    if "user_type" not in st.session_state or st.session_state.user_type != "chef":
-        st.error("Åtkomst nekad. Du är inte inloggad som chef.")
+    # Om användaren inte är inloggad som chef, visa felmeddelande och omdirigera till startsidan
+    if st.session_state.get("user_type") != "chef":
+        st.error("Åtkomst nekad. Du är inte inloggad som chef. Omdirigerar till startsidan...")
+        st.markdown("<meta http-equiv='refresh' content='3; url=https://vardschema.streamlit.app/' />", unsafe_allow_html=True)
         st.stop()
-
+    
     required_keys = ["staff", "dark_mode", "language", "user_type", "hospital"]
     for key in required_keys:
         if key not in st.session_state:
@@ -141,6 +143,16 @@ def show_chef_interface():
     st.header("📅 Schemagenerering")
     if st.button("🚀 Generera schema"):
         generate_schedule(employees)
+    
+    st.markdown("---")
+    # Utloggningsknapp med redirect till startsidan (inloggningssidan)
+    if st.button("🚪 Logga ut"):
+        # Rensa session state
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        # Omdirigera till startsidan
+        st.markdown("<meta http-equiv='refresh' content='0; url=https://vardschema.streamlit.app/' />", unsafe_allow_html=True)
+        st.stop()
 
 # ========== SCHEMAGENERERING ==========
 def generate_schedule(employees):
