@@ -29,18 +29,9 @@ LANGUAGES = {
     }
 }
 
-# ========== INITIERING ==========
+# ========== INITIERING AV SESSION ==========
+# Se till att nödvändiga nycklar finns i sessionen. Ingen rollkontroll görs här.
 def init_session():
-    # Om användaren inte är inloggad som chef, omdirigera till anställdssidan
-    if st.session_state.get("user_type") != "chef":
-        st.error("Åtkomst nekad. Du är inte inloggad som chef. Omdirigerar till anställdssidan...")
-        # Försök att omdirigera till anställdssidan (ändra URL:en nedan om det behövs)
-        st.markdown(
-            "<meta http-equiv='refresh' content='3; url=https://vardschema.streamlit.app/?page=2_Anstalld' />",
-            unsafe_allow_html=True
-        )
-        st.stop()
-
     required_keys = ["staff", "dark_mode", "language", "user_type", "hospital"]
     for key in required_keys:
         if key not in st.session_state:
@@ -51,14 +42,14 @@ def init_session():
             elif key == "language":
                 st.session_state[key] = "sv"
             elif key == "user_type":
-                st.session_state[key] = None
+                # Sätt ett standardvärde – nu spelar det ingen roll vilken roll användaren har
+                st.session_state[key] = "chef"
             elif key == "hospital":
-                # Sätt ett standardvärde (t.ex. "Karolinska") om det saknas
                 st.session_state[key] = "Karolinska"
 
 # ========== CHEFSGRÄNSSNITT ==========
 def show_chef_interface():
-    init_session()  # Kontroll sker här – om du inte är chef avbryts exekveringen
+    init_session()
     lang = LANGUAGES["sv"]
     
     # Header
@@ -162,7 +153,7 @@ def show_chef_interface():
 # ========== SCHEMAGENERERING ==========
 def generate_schedule(employees):
     try:
-        # Omvandla varje anställds data till en dict
+        # Konvertera anställdas data till en lista med dictionaries
         staff = [{
             "name": e[2],
             "experience": e[7],
@@ -179,7 +170,6 @@ def generate_schedule(employees):
         days = LANGUAGES["sv"]["days"]
         schedule_data = []
         eligible = [emp for emp in staff if emp["experience"] >= 4]
-        # För varje dag, välj en ledare bland de med tillräcklig erfarenhet
         for i, day in enumerate(days):
             leader = eligible[i % len(eligible)] if eligible else None
             leader_name = f"{leader['name']} ★" if leader else "Ingen ledare"
@@ -189,7 +179,6 @@ def generate_schedule(employees):
                 "Ledningsansvarig": leader_name,
                 "Personal": all_staff
             })
-
         schedule_df = pd.DataFrame(schedule_data)
         st.dataframe(
             schedule_df.style.background_gradient(subset=["Ledningsansvarig"], cmap="YlGnBu"),
@@ -210,5 +199,5 @@ def generate_schedule(employees):
     except Exception as e:
         st.error(f"Kunde inte generera schema: {str(e)}")
 
-# Anropa gränssnittet så att sidan renderas
+# Anropa chefsidans gränssnitt så att sidan renderas
 show_chef_interface()
