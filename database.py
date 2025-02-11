@@ -24,7 +24,7 @@ def save_employee_prefs(data):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     
-    # Kolla om redan finns
+    # Kolla om posten redan finns
     c.execute('''SELECT * FROM employees 
                  WHERE hospital=? AND name=?''',
               (data["hospital"], data["name"]))
@@ -37,7 +37,7 @@ def save_employee_prefs(data):
                      WHERE id=?''',
                   (data["workload"],
                    ",".join(data["work_types"]),
-                   data["max_consecutive_days"],
+                   data["max_consec_days"],
                    data["min_days_off"],
                    data["experience"],
                    datetime.now(),
@@ -51,7 +51,7 @@ def save_employee_prefs(data):
                    data["name"],
                    data["workload"],
                    ",".join(data["work_types"]),
-                   data["max_consecutive_days"],
+                   data["max_consec_days"],
                    data["min_days_off"],
                    data["experience"],
                    datetime.now()))
@@ -62,8 +62,7 @@ def save_employee_prefs(data):
 def get_employees(hospital):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute('''SELECT * FROM employees 
-                 WHERE hospital=?''', (hospital,))
+    c.execute('''SELECT * FROM employees WHERE hospital=?''', (hospital,))
     employees = c.fetchall()
     conn.close()
     return employees
@@ -77,7 +76,7 @@ def update_employee(data):
                  WHERE id=?''',
               (data["workload"],
                ",".join(data["work_types"]),
-               data["max_consecutive_days"],
+               data["max_consec_days"],  # Ändrad från "max_consecutive_days" till "max_consec_days"
                data["min_days_off"],
                data["experience"],
                datetime.now(),
