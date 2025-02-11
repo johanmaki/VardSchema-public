@@ -4,6 +4,5 @@ matplotlib>=3.8.4
 plotly>=5.18.0
 python-dotenv>=1.0.0
 
-<<<<<<< HEAD
+
 #fikon
->>>>>>> 890a6eb88784272255d48fd4e0a8b678d504f720
