@@ -163,7 +163,7 @@ def generate_schedule(employees):
         } for e in employees]
 
         # Kontroll: minst en anställd måste ha erfarenhet >= 4
-       if not any(emp["experience"] >= 4 for emp in staff):
+        if not any(emp["experience"] >= 4 for emp in staff):
             st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre för att utse en ledningsansvarig.")
             return
 
