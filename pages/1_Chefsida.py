@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from database import get_employees, update_employee
 from datetime import datetime
 
-# Ställ in sidkonfigurationen direkt efter importsatserna (måste vara det första st-kommandot)
+# Ställ in sidkonfigurationen (måste vara det första st-kommandot)
 st.set_page_config(page_title="Chefsida", layout="wide")
 
 # ========== KONFIGURATION ==========
@@ -31,12 +31,16 @@ LANGUAGES = {
 
 # ========== INITIERING ==========
 def init_session():
-    # Om användaren inte är inloggad som chef, visa felmeddelande och omdirigera till startsidan
+    # Om användaren inte är inloggad som chef, omdirigera till anställdssidan
     if st.session_state.get("user_type") != "chef":
-        st.error("Åtkomst nekad. Du är inte inloggad som chef. Omdirigerar till startsidan...")
-        st.markdown("<meta http-equiv='refresh' content='3; url=https://vardschema.streamlit.app/' />", unsafe_allow_html=True)
+        st.error("Åtkomst nekad. Du är inte inloggad som chef. Omdirigerar till anställdssidan...")
+        # Försök att omdirigera till anställdssidan (ändra URL:en nedan om det behövs)
+        st.markdown(
+            "<meta http-equiv='refresh' content='3; url=https://vardschema.streamlit.app/?page=2_Anstalld' />",
+            unsafe_allow_html=True
+        )
         st.stop()
-    
+
     required_keys = ["staff", "dark_mode", "language", "user_type", "hospital"]
     for key in required_keys:
         if key not in st.session_state:
@@ -49,12 +53,12 @@ def init_session():
             elif key == "user_type":
                 st.session_state[key] = None
             elif key == "hospital":
-                # För teständamål sätter vi ett standardvärde, t.ex. "Karolinska"
+                # Sätt ett standardvärde (t.ex. "Karolinska") om det saknas
                 st.session_state[key] = "Karolinska"
 
 # ========== CHEFSGRÄNSSNITT ==========
 def show_chef_interface():
-    init_session()
+    init_session()  # Kontroll sker här – om du inte är chef avbryts exekveringen
     lang = LANGUAGES["sv"]
     
     # Header
@@ -145,19 +149,20 @@ def show_chef_interface():
         generate_schedule(employees)
     
     st.markdown("---")
-    # Utloggningsknapp med redirect till startsidan (inloggningssidan)
+    # Utloggningsknapp – rensar sessionen och omdirigerar till startsidan (inloggningssidan)
     if st.button("🚪 Logga ut"):
-        # Rensa session state
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-        # Omdirigera till startsidan
-        st.markdown("<meta http-equiv='refresh' content='0; url=https://vardschema.streamlit.app/' />", unsafe_allow_html=True)
+        st.markdown(
+            "<meta http-equiv='refresh' content='0; url=https://vardschema.streamlit.app/' />",
+            unsafe_allow_html=True
+        )
         st.stop()
 
 # ========== SCHEMAGENERERING ==========
 def generate_schedule(employees):
     try:
-        # Konvertera anställdas data till en lista med dicts
+        # Omvandla varje anställds data till en dict
         staff = [{
             "name": e[2],
             "experience": e[7],
@@ -171,11 +176,10 @@ def generate_schedule(employees):
             st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre för att utse en ledningsansvarig.")
             return
 
-        # Dummy-schemagenerering: för varje dag, välj en ledare bland de med erfarenhet >= 4
         days = LANGUAGES["sv"]["days"]
         schedule_data = []
         eligible = [emp for emp in staff if emp["experience"] >= 4]
-        # Rotera listan för jämn fördelning
+        # För varje dag, välj en ledare bland de med tillräcklig erfarenhet
         for i, day in enumerate(days):
             leader = eligible[i % len(eligible)] if eligible else None
             leader_name = f"{leader['name']} ★" if leader else "Ingen ledare"
@@ -195,7 +199,7 @@ def generate_schedule(employees):
 
         # Visuell representation (exempel med dummy-poäng)
         fig, ax = plt.subplots()
-        schedule_df["Poäng"] = schedule_df["Personal"].apply(lambda x: len(x))  # dummy-poäng
+        schedule_df["Poäng"] = schedule_df["Personal"].apply(lambda x: len(x))
         ax.bar(
             schedule_df["Dag"],
             schedule_df["Poäng"],
@@ -206,5 +210,5 @@ def generate_schedule(employees):
     except Exception as e:
         st.error(f"Kunde inte generera schema: {str(e)}")
 
-# Anropa chefgränssnittet så att sidan renderas
+# Anropa gränssnittet så att sidan renderas
 show_chef_interface()
