@@ -18,7 +18,7 @@ def main():
         show_landing_page()
 
 def show_landing_page():
-    st.title("Välkommen till VårdSchema Pro")
+    st.title("Välkommen till VårdSchema!!!")
     
     hospital = st.selectbox(
         "Välj ditt sjukhus",
