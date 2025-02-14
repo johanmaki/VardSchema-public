@@ -31,7 +31,7 @@ def save_preferences(data):
             "Användarnamn": data.get("name", "Anonymous"),
             "Arbetsbelastning (%)": data["workload"],
             "Prioriterade arbetsformer": ", ".join(data["work_types"]),
-            "Max sammanhängande dagar": data["max_consecutive_days"],
+            "Max sammanhängande dagar": data["max_consec_days"],
             "Minsta lediga dagar": data["min_days_off"]
         }])
         
@@ -88,14 +88,14 @@ def main_employee_interface():
         st.markdown("### ⚠️ Begränsningar")
         col1, col2 = st.columns(2)
         with col1:
-            max_consecutive_days = st.number_input(
+            max_consec_days = st.number_input(
                 "Max antal sammanhängande arbetsdagar",
                 min_value=1,
                 max_value=7,
                 value=5,
                 help="Max antal dagar i rad du kan arbeta"
             )
-            st.session_state.max_consecutive_days = max_consecutive_days
+            st.session_state.max_consec_days = max_consec_days
         with col2:
             min_days_off = st.number_input(
                 "Minsta antal lediga dagar/vecka",
@@ -115,7 +115,7 @@ def main_employee_interface():
                     "name": st.session_state.user_name.strip(),
                     "workload": st.session_state.workload,
                     "work_types": st.session_state.work_types,
-                    "max_consecutive_days": st.session_state.max_consecutive_days,
+                    "max_consec_days": st.session_state.max_consec_days,
                     "min_days_off": st.session_state.min_days_off,
                     "experience": 1  # Standardvärde för ny anställd
                 }
