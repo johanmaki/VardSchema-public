@@ -114,9 +114,12 @@ def show_chef_interface():
                         "min_days_off": min_off,
                         "experience": new_exp
                     }
-                    update_employee(update_data)
-                    st.success("Ändringar sparade!")
-                    st.experimental_rerun()
+                    try:
+                        update_employee(update_data)
+                        st.success("Ändringar sparade!")
+                        st.experimental_rerun()
+                    except Exception as e:
+                        st.error(f"Fel vid uppdatering av anställd: {str(e)}")
     
     st.markdown("---")
     # Informationsknapp för erfarenhetsnivåer
