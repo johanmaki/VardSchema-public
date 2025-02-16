@@ -83,8 +83,12 @@ def remove_employee(employee_id):
         from database import delete_employee  # Importera delete_employee från database.py
         delete_employee(employee_id)
         st.success("Anställd togs bort.")
+        # Om du vill att sidan ska ladda om automatiskt, försök med st.experimental_rerun().
+        # Om det orsakar problem, kommentera ut nästa rad.
+        st.experimental_rerun()
     except Exception as e:
         st.error(f"Fel vid borttagning: {str(e)}")
+
 
 # ---------- FUNKTIONER FÖR DAGSBASERAD SCHEMAGENERERING ----------
 def can_work(emp, day, emp_state):
