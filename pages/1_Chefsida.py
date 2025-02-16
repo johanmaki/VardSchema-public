@@ -117,7 +117,7 @@ def show_chef_interface():
                     try:
                         update_employee(update_data)
                         st.success("Ändringar sparade!")
-                        st.experimental_rerun()
+                        st.stop()  # Stop execution instead of rerunning
                     except Exception as e:
                         st.error(f"Fel vid uppdatering av anställd: {str(e)}")
     
