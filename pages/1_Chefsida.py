@@ -175,7 +175,7 @@ def generate_schedule(employees):
         eligible = [emp for emp in staff if emp["experience"] >= 4]
         for i, day in enumerate(days):
             leader = eligible[i % len(eligible)] if eligible else None
-            leader_name = f"{leader['name']} ★" if leader else "Ingen ledare"
+            leader_name = leader['name'].replace(" ★", "") if leader else "Ingen ledare"  # Remove special character
             all_staff = ", ".join([emp["name"] for emp in staff])
             schedule_data.append({
                 "Dag": day,
