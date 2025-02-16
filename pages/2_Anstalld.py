@@ -50,7 +50,7 @@ def save_preferences(data):
 
 def main_employee_interface():
     """Huvudgränssnitt för anställda – ingen åtkomstkontroll här."""
-    if 'hospital' not in st.session_state:  # Check if hospital is in session state
+    if 'hospital' not in st.session_state:  # Check if hospital is not in session state
         st.title("Vänligen logga in")  # Prompt for login if session state is empty
         return  # Exit the function if not logged in
     st.title(f"🧑⚕️ Anställdsida - {st.session_state.hospital}")
@@ -155,8 +155,7 @@ def main_employee_interface():
     if st.button("🚪 Logga ut"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-        if 'hospital' not in st.session_state:  # Check if hospital is cleared
-            st.experimental_rerun()  # Only rerun if the session state is valid
+        # Removed redundant rerun logic after logout
 
 def show():
     # Ingen autentiseringskontroll – alla får se sidan
