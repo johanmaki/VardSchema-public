@@ -53,7 +53,7 @@ def init_session():
         "language": "sv",
         "user_type": "chef",
         "hospital": "Karolinska",
-        "min_experience_req": 10  # Defaultvärde för minimi-poäng
+        "min_experience_req": 10  # Defaultvärde för minsta totala erfarenhetspoäng per dag
     }
     for key in required_keys:
         if key not in st.session_state:
@@ -94,7 +94,6 @@ def show_chef_interface():
                         "Arbetsbelastning (%)",
                         50, 100, emp_data[3], step=5
                     )
-                    # Se till att indexet blir giltigt
                     current_exp = emp_data[7] if emp_data[7] else 1
                     exp_index = max(0, int(current_exp) - 1)
                     new_exp = st.selectbox(
@@ -180,19 +179,15 @@ def show_chef_interface():
         )
         st.stop()
 
-# ---------- HJÄLPFUNKTIONER FÖR SCHEMAGENERERING ----------
-
+# ---------- Hjälpfunktion för individrestriktioner ----------
 def can_work_with_reason(emp, day_idx, staff_state):
     """
     Returnerar en tuple (bool, reason) som anger om emp kan arbeta på day_idx.
-    Om False returneras även ett felmeddelande.
+    Här kontrolleras att inte max_work_days eller max_consec_days överskrids.
     """
     st_state = staff_state[emp["id"]]
     if st_state["worked_days"] >= emp["max_work_days"]:
         return (False, f"{emp['name']} har nått max arbetsdagar ({emp['max_work_days']}).")
-    days_since_worked = day_idx - st_state["last_worked_day"] - 1
-    if days_since_worked < emp["min_days_off"]:
-        return (False, f"{emp['name']} har inte vilat tillräckligt (krav: {emp['min_days_off']} lediga dagar).")
     potential_consec = 1
     if day_idx == st_state["last_worked_day"] + 1:
         potential_consec = st_state["consec_days"] + 1
@@ -207,7 +202,6 @@ def generate_schedule(employees: list[tuple]) -> None:
     Tar hänsyn till:
       - Minst en med experience >= 4 per dag
       - max_consec_days
-      - min_days_off
       - Arbetsbelastning i % (workload) → max antal arbetsdagar av 7
       - Minsta totala erfarenhetspoäng (chefens krav)
     Använder en backtracking-algoritm.
@@ -215,12 +209,16 @@ def generate_schedule(employees: list[tuple]) -> None:
     days = LANGUAGES["sv"]["days"]
     min_exp_req = st.session_state.get("min_experience_req", 10)
 
-    # Konvertera anställdas data till en lista med dictionaries
+    # Konvertera anställdas data till en lista med dictionaries.
+    # Vi räknar ut baserat på arbetsbelastning, men begränsar även så att antalet arbetsdagar
+    # inte överstiger (7 - min_days_off) för att säkerställa att minsta lediga dagar respekteras.
     staff = []
     for e in employees:
-        max_work_days = round((e[3] / 100) * 7)
-        if max_work_days < 1:
-            max_work_days = 1
+        base_max = round((e[3] / 100) * 7)
+        if base_max < 1:
+            base_max = 1
+        # Effektivt max: man får inte arbeta mer än (7 - min_days_off) dagar under veckan.
+        effective_max = min(base_max, 7 - e[6])
         try:
             exp_val = int(e[7])
         except:
@@ -231,9 +229,9 @@ def generate_schedule(employees: list[tuple]) -> None:
             "workload_percent": e[3],
             "work_types": e[4].split(",") if e[4] else [],
             "max_consec_days": e[5],
-            "min_days_off": e[6],
+            "min_days_off": e[6],  # Behåll för historik, men används ej i per-dag-check längre.
             "experience": exp_val,
-            "max_work_days": max_work_days
+            "max_work_days": effective_max
         })
 
     if not any(s["experience"] >= 4 for s in staff):
@@ -249,7 +247,7 @@ def generate_schedule(employees: list[tuple]) -> None:
             "last_worked_day": -999
         }
 
-    # Variabler för att spåra varför schemaläggning misslyckas
+    # Variabler för att spåra varför schemaläggningen misslyckas
     st.session_state["failed_day"] = None
     st.session_state["fail_reason"] = ""
 
@@ -259,19 +257,16 @@ def generate_schedule(employees: list[tuple]) -> None:
 
         combo_list = list(combinations(staff, TEAM_SIZE))
         random.shuffle(combo_list)
-
         feasible_combo_found = False
 
         for combo in combo_list:
             # Kontrollera att minst en har erfarenhet >= 4
             if not any(e["experience"] >= 4 for e in combo):
                 continue
-
             # Kontrollera total erfarenhet
             total_exp = sum(e["experience"] for e in combo)
             if total_exp < min_exp_req:
                 continue
-
             # Kontrollera individuella restriktioner
             individual_ok = True
             for e in combo:
@@ -287,7 +282,6 @@ def generate_schedule(employees: list[tuple]) -> None:
             saved_states = {}
             for e in combo:
                 saved_states[e["id"]] = staff_state[e["id"]].copy()
-                # Uppdatera staff_state
                 if day_idx == staff_state[e["id"]]["last_worked_day"] + 1:
                     staff_state[e["id"]]["consec_days"] += 1
                 else:
@@ -303,11 +297,14 @@ def generate_schedule(employees: list[tuple]) -> None:
                 for e in combo:
                     staff_state[e["id"]] = saved_states[e["id"]]
         if not feasible_combo_found:
-            # Bestäm vilka constraint som misslyckades
+            # Bestäm vilka constraint-grupper som misslyckades
             leader_ok = any(any(e["experience"] >= 4 for e in combo) for combo in combo_list)
-            total_exp_ok = any(any(e["experience"] >= 4 for e in combo) and sum(e["experience"] for e in combo) >= min_exp_req for combo in combo_list)
+            total_exp_ok = any(
+                any(e["experience"] >= 4 for e in combo) and sum(e["experience"] for e in combo) >= min_exp_req
+                for combo in combo_list
+            )
             individual_ok = any(
-                any(e["experience"] >= 4 for e in combo) and
+                any(e["experience"] >= 4 for e in combo) and 
                 sum(e["experience"] for e in combo) >= min_exp_req and
                 all(can_work_with_reason(e, day_idx, staff_state)[0] for e in combo)
                 for combo in combo_list
@@ -318,7 +315,7 @@ def generate_schedule(employees: list[tuple]) -> None:
             if not total_exp_ok:
                 failed_constraints.append(f"total erfarenhet (krav {min_exp_req})")
             if not individual_ok:
-                failed_constraints.append("individuella restriktioner (max_consec_days, min_days_off, max_work_days)")
+                failed_constraints.append("individuella restriktioner (max_consec_days, max_work_days)")
             st.session_state["failed_day"] = day_idx
             st.session_state["fail_reason"] = ", ".join(failed_constraints)
         return False
@@ -336,7 +333,7 @@ def generate_schedule(employees: list[tuple]) -> None:
             st.error("Kunde inte hitta ett giltigt schema givet alla constraints.")
         return
 
-    # Bygg DataFrame
+    # Bygg DataFrame av schemat
     schedule_rows = []
     for i, combo in enumerate(final_assignment):
         day_name = days[i]
