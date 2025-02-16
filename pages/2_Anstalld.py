@@ -155,7 +155,8 @@ def main_employee_interface():
     if st.button("🚪 Logga ut"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-        st.experimental_rerun()
+        if 'hospital' not in st.session_state:  # Check if hospital is cleared
+            st.experimental_rerun()  # Only rerun if the session state is valid
 
 def show():
     # Ingen autentiseringskontroll – alla får se sidan
