@@ -91,13 +91,14 @@ def remove_employee(employee_id):
 
 
 # ---------- FUNKTIONER FÖR DAGSBASERAD SCHEMAGENERERING ----------
-def can_work(emp, day, emp_state):
+def can_work(emp, day, emp_state, shift_type):
     """
-    Kollar om en anställd kan arbeta på given dag.
-    Inga två pass per dag är tillåtna.
-    Kontrollerar också att max_shifts och max_consec_days inte överskrids.
+    Kontrollerar om en anställd kan arbeta på given dag.
+    MAX ett pass per dag gäller OAVSETT skifttyp.
+    Kontrollerar även att max_shifts och max_consec_days inte överskrids.
     """
     state = emp_state[emp["id"]]
+    # Kontrollera om anställd redan fått pass den dagen, oavsett skift
     if day in state["assigned_days"]:
         return (False, f"{emp['name']} är redan schemalagd den dagen.")
     if state["worked_shifts"] >= emp["max_shifts"]:
@@ -108,18 +109,21 @@ def can_work(emp, day, emp_state):
             return (False, f"{emp['name']} överskrider max sammanhängande dagar ({emp['max_consec_days']}).")
     return (True, "")
 
-def assign_shifts_for_day(day, shifts, available, emp_state, min_exp_req):
+def assign_shifts_for_day(day, shifts, available, all_staff, emp_state, min_exp_req):
     """
-    Backtracking-funktion för att dela in tillgänglig personal (available)
-    i TEAM_SIZE-grupper för samtliga shifts under en dag.
-    Returnerar (assignment, updated_emp_state) eller None om det inte går.
-    assignment är en lista med tuples (shift, team)
+    Backtracking-funktion för att dela in tillgänglig personal i TEAM_SIZE-grupper
+    för samtliga shifts under en dag. Nu används samma available-lista för alla skift,
+    så att varje anställd får högst ett pass per dag.
+    Returnerar (assignment, updated_emp_state) eller None om ingen full lösning hittas.
+    assignment är en lista med tuples (shift, team).
     """
     if not shifts:
         return ([], emp_state)
     current_shift = shifts[0]
-    # Prova alla kombinationer av TEAM_SIZE från available
-    for combo in combinations(available, TEAM_SIZE):
+    # Använd alltid 'available' (alla som ännu inte fått ett pass den dagen)
+    current_available = available
+
+    for combo in combinations(current_available, TEAM_SIZE):
         total_exp = sum(emp["experience"] for emp in combo)
         if total_exp < min_exp_req:
             continue
@@ -127,13 +131,13 @@ def assign_shifts_for_day(day, shifts, available, emp_state, min_exp_req):
             continue
         valid = True
         for emp in combo:
-            ok, _ = can_work(emp, day, emp_state)
+            ok, _ = can_work(emp, day, emp_state, current_shift["shift"])
             if not ok:
                 valid = False
                 break
         if not valid:
             continue
-        # Gör en kopia av emp_state och uppdatera för de anställda i combo
+        # Uppdatera en kopia av emp_state för de anställda i combo
         new_state = {eid: emp_state[eid].copy() for eid in emp_state}
         for emp in combo:
             s = new_state[emp["id"]]
@@ -144,12 +148,14 @@ def assign_shifts_for_day(day, shifts, available, emp_state, min_exp_req):
             else:
                 s["consec_days"] = 1
             s["last_worked_date"] = day
-        remaining_available = [emp for emp in available if emp not in combo]
-        result = assign_shifts_for_day(day, shifts[1:], remaining_available, new_state, min_exp_req)
+        # Ta bort de som fått passet från available (max ett pass per dag)
+        new_available = [emp for emp in available if emp not in combo]
+        result = assign_shifts_for_day(day, shifts[1:], new_available, all_staff, new_state, min_exp_req)
         if result is not None:
             assignment_rest, final_state = result
             return ([(current_shift, combo)] + assignment_rest, final_state)
     return None
+
 
 # ---------- HUVUDFUNKTION FÖR SCHEMAGENERERING ----------
 def generate_schedule(employees: list[tuple]) -> None:
@@ -326,7 +332,7 @@ def show_chef_interface_wrapper():
         if st.button("Ta bort anställd"):
             delete_id = emp_options[to_delete]
             remove_employee(delete_id)
-           # st.experimental_rerun() 
+           # st.experimental_rerun() Verkar ej 
     else:
         st.info("Inga anställda finns att hantera.")
     
@@ -369,7 +375,7 @@ def show_chef_interface_wrapper():
                     try:
                         update_employee(update_data)
                         st.success("Ändringar sparade!")
-                       # st.experimental_rerun()
+                        st.experimental_rerun()
                     except Exception as e:
                         st.error(f"Fel vid uppdatering av anställd: {str(e)}")
     

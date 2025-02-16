@@ -50,9 +50,9 @@ def save_preferences(data):
 
 def main_employee_interface():
     """Huvudgränssnitt för anställda – ingen åtkomstkontroll här."""
-    if 'hospital' not in st.session_state:  # Check if hospital is not in session state
-        st.title("Vänligen logga in")  # Prompt for login if session state is empty
-        return  # Exit the function if not logged in
+    if 'hospital' not in st.session_state:  # Om ingen inloggning
+        st.title("Vänligen logga in")
+        return
     st.title(f"🧑⚕️ Anställdsida - {st.session_state.hospital}")
     st.markdown("---")
 
@@ -122,7 +122,7 @@ def main_employee_interface():
                     "min_days_off": st.session_state.min_days_off,
                     "experience": 1  # Standardvärde för ny anställd
                 }
-                # Spara till databasen (om du använder detta)
+                # Spara till databasen
                 save_employee_prefs(data)
                 # Spara även till CSV för historikvisning
                 if save_preferences(data):
@@ -151,17 +151,20 @@ def main_employee_interface():
         st.error(f"Kunde inte ladda historik: {str(e)}")
 
     st.markdown("---")
-    # Utloggningsknapp
+    # Utloggningsknapp – rensar session state och omdirigerar
     if st.button("🚪 Logga ut"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-        # Removed redundant rerun logic after logout
+        st.markdown(
+            "<meta http-equiv='refresh' content='0; url=https://vardschema.streamlit.app/' />",
+            unsafe_allow_html=True
+        )
+        # Ta bort st.stop() så att meta-refreshen hinner köras utan att blockera
 
 def show():
-    # Ingen autentiseringskontroll – alla får se sidan
-    if 'hospital' in st.session_state:  # Check if hospital is in session state
+    if 'hospital' in st.session_state:
         main_employee_interface()
     else:
-        st.title("Vänligen logga in")  # Prompt for login if session state is empty
+        st.title("Vänligen logga in")
 
 show()
