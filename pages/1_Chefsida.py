@@ -77,28 +77,23 @@ def get_initials(name):
     parts = name.split()
     return "".join(p[0].upper() for p in parts if p)
 
-# Funktion för att ta bort en anställd från databasen
 def remove_employee(employee_id):
     try:
-        from database import delete_employee  # Importera delete_employee från database.py
+        from database import delete_employee  # Alternativt använd den definierade delete_employee-funktionen
         delete_employee(employee_id)
         st.success("Anställd togs bort.")
-        # Om du vill att sidan ska ladda om automatiskt, försök med st.experimental_rerun().
-        # Om det orsakar problem, kommentera ut nästa rad.
-        ## st.experimental_rerun()
+        st.experimental_rerun()
     except Exception as e:
         st.error(f"Fel vid borttagning: {str(e)}")
-
 
 # ---------- FUNKTIONER FÖR DAGSBASERAD SCHEMAGENERERING ----------
 def can_work(emp, day, emp_state, shift_type):
     """
     Kontrollerar om en anställd kan arbeta på given dag.
-    MAX ett pass per dag gäller OAVSETT skifttyp.
+    MAX ett pass per dag gäller, oavsett skifttyp.
     Kontrollerar även att max_shifts och max_consec_days inte överskrids.
     """
     state = emp_state[emp["id"]]
-    # Kontrollera om anställd redan fått pass den dagen, oavsett skift
     if day in state["assigned_days"]:
         return (False, f"{emp['name']} är redan schemalagd den dagen.")
     if state["worked_shifts"] >= emp["max_shifts"]:
@@ -112,17 +107,14 @@ def can_work(emp, day, emp_state, shift_type):
 def assign_shifts_for_day(day, shifts, available, all_staff, emp_state, min_exp_req):
     """
     Backtracking-funktion för att dela in tillgänglig personal i TEAM_SIZE-grupper
-    för samtliga shifts under en dag. Nu används samma available-lista för alla skift,
-    så att varje anställd får högst ett pass per dag.
+    för samtliga shifts under en dag.
     Returnerar (assignment, updated_emp_state) eller None om ingen full lösning hittas.
     assignment är en lista med tuples (shift, team).
     """
     if not shifts:
         return ([], emp_state)
     current_shift = shifts[0]
-    # Använd alltid 'available' (alla som ännu inte fått ett pass den dagen)
     current_available = available
-
     for combo in combinations(current_available, TEAM_SIZE):
         total_exp = sum(emp["experience"] for emp in combo)
         if total_exp < min_exp_req:
@@ -148,7 +140,6 @@ def assign_shifts_for_day(day, shifts, available, all_staff, emp_state, min_exp_
             else:
                 s["consec_days"] = 1
             s["last_worked_date"] = day
-        # Ta bort de som fått passet från available (max ett pass per dag)
         new_available = [emp for emp in available if emp not in combo]
         result = assign_shifts_for_day(day, shifts[1:], new_available, all_staff, new_state, min_exp_req)
         if result is not None:
@@ -156,17 +147,15 @@ def assign_shifts_for_day(day, shifts, available, all_staff, emp_state, min_exp_
             return ([(current_shift, combo)] + assignment_rest, final_state)
     return None
 
-
 # ---------- HUVUDFUNKTION FÖR SCHEMAGENERERING ----------
 def generate_schedule(employees: list[tuple]) -> None:
     """
-    Schemalägg tre skift per dag över en period (exempelvis två månader).
+    Schemalägg tre skift per dag över en period (t.ex. två månader).
     Varje pass (shift) ska ha:
       - Total erfarenhet >= chefens krav (min_exp_req)
       - Minst en anställd med erfarenhet ≥4
     Varje anställd får högst ett pass per dag.
     """
-    # Hämta inställningar
     period_start = st.session_state["period_start"]
     period_length = st.session_state["period_length"]
     min_exp_req = st.session_state["min_experience_req"]
@@ -178,18 +167,14 @@ def generate_schedule(employees: list[tuple]) -> None:
     night_start = st.session_state["night_start"]
     night_end = st.session_state["night_end"]
 
-    # Definiera shifts
     shift_types = [
         {"shift": "Morgon", "start": morning_start, "end": morning_end},
         {"shift": "EM", "start": em_start, "end": em_end},
         {"shift": "Natt", "start": night_start, "end": night_end}
     ]
 
-    # Skapa lista med datum för perioden
     dates = [period_start + timedelta(days=i) for i in range(period_length)]
-    
-    # För varje dag, skapa shift-pass (alla tre skift)
-    daily_shifts = {}  # key: datum, value: list av shift-dikter
+    daily_shifts = {}
     for d in dates:
         weekday = d.strftime("%A")
         daily_shifts[d] = []
@@ -202,7 +187,6 @@ def generate_schedule(employees: list[tuple]) -> None:
                 "end": stype["end"]
             })
     
-    # Konvertera anställdas data till dictionaries
     new_staff = []
     for e in employees:
         try:
@@ -212,7 +196,6 @@ def generate_schedule(employees: list[tuple]) -> None:
         base_max = round((e[3] / 100) * period_length)
         if base_max < 1:
             base_max = 1
-        # Här används base_max direkt som max_shifts (eventuella ytterligare regler kan läggas till)
         new_staff.append({
             "id": e[0],
             "name": e[2],
@@ -228,7 +211,6 @@ def generate_schedule(employees: list[tuple]) -> None:
         st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre.")
         return
 
-    # Initiera anställdastatus (emp_state)
     emp_state = {}
     for s in new_staff:
         emp_state[s["id"]] = {
@@ -237,28 +219,24 @@ def generate_schedule(employees: list[tuple]) -> None:
             "consec_days": 0,
             "assigned_days": set()
         }
-        
-    schedule = []    # Lista med schemauppgifter (per shift)
-    failed_days = {} # Datum -> lista med felmeddelanden för de shifts som ej kunde fyllas
 
-    # Processa dag för dag (alla shifts per dag)
+    schedule = []
+    failed_days = {}
     for day in dates:
         shifts = daily_shifts[day]
-        res = assign_shifts_for_day(day, shifts, new_staff, emp_state, min_exp_req)
+        # Kalla funktionen med 6 argument: (day, shifts, available, all_staff, emp_state, min_exp_req)
+        res = assign_shifts_for_day(day, shifts, new_staff, new_staff, emp_state, min_exp_req)
         if res is None:
-            # Om vi inte hittar en fullständig lösning för dagen, markera alla shifts som ej schemalagda
-            failed_days[day] = [f"{shift['shift']}: Ingen kombination uppfyllde kraven (minst total erfarenhet {min_exp_req} samt minst en med ≥4)." for shift in shifts]
-            # Lägg in tomma poster i schemat
+            failed_days[day] = [f"{shift['shift']}: Ingen kombination uppfyllde kraven (minsta total erfarenhet {min_exp_req} samt minst en med ≥4)." for shift in shifts]
             for shift in shifts:
                 schedule.append({"slot": shift, "assigned": None})
         else:
             assignment, updated_state = res
-            emp_state = updated_state  # Uppdatera global state
+            emp_state = updated_state
             for asg in assignment:
                 shift_info, team = asg
                 schedule.append({"slot": shift_info, "assigned": team})
     
-    # Om det fanns fel, visa en varning
     if failed_days:
         error_msgs = []
         for d, msgs in failed_days.items():
@@ -266,7 +244,6 @@ def generate_schedule(employees: list[tuple]) -> None:
                 error_msgs.append(f"{d} ({m})")
         st.error("Följande pass kunde inte schemaläggas:\n" + "\n".join(error_msgs))
     
-    # Bygg schemaöversikt (tabell)
     schedule_rows = []
     for item in schedule:
         slot = item["slot"]
@@ -284,7 +261,6 @@ def generate_schedule(employees: list[tuple]) -> None:
         })
     schedule_df = pd.DataFrame(schedule_rows)
     
-    # Sammanfattning: antal pass per anställd
     summary_rows = []
     for emp in new_staff:
         summary_rows.append({
@@ -299,7 +275,6 @@ def generate_schedule(employees: list[tuple]) -> None:
     st.subheader("Översikt: Antal pass per anställd")
     st.dataframe(summary_df, use_container_width=True, hide_index=True)
     
-    # Kalenderöversikt (pivot-tabell)
     fig, ax = plt.subplots(figsize=(12, 6))
     try:
         pivot = schedule_df.pivot(index="Datum", columns="Skift", values="Personal (Initialer)")
@@ -316,7 +291,6 @@ def generate_schedule(employees: list[tuple]) -> None:
     ax.set_title("Kalenderöversikt för kommande pass")
     st.pyplot(fig)
 
-# ---------- CHEFSSIDANS GRÄNSSNITT ----------
 def show_chef_interface_wrapper():
     init_session()
     lang = LANGUAGES["sv"]
@@ -332,7 +306,7 @@ def show_chef_interface_wrapper():
         if st.button("Ta bort anställd"):
             delete_id = emp_options[to_delete]
             remove_employee(delete_id)
-           # st.experimental_rerun() Verkar ej 
+            st.experimental_rerun()
     else:
         st.info("Inga anställda finns att hantera.")
     
@@ -427,5 +401,4 @@ def show_chef_interface_wrapper():
                     unsafe_allow_html=True)
         st.stop()
 
-# ---------- Start ----------
 show_chef_interface_wrapper()
