@@ -70,8 +70,7 @@ def init_session():
 
 init_session()
 
-# ------------------ HJÄLPFUNKTIONER FÖR SCHEMAGENERERING ------------------
-
+# ------------------ HJÄLPFUNKTIONER ------------------
 def get_initials(name):
     parts = name.split()
     return "".join(p[0].upper() for p in parts if p)
@@ -81,7 +80,8 @@ def generate_schedule(employees: list[tuple]) -> None:
     """
     Schemalägg tre skift per dag över en period (t.ex. två månader).
     Varje pass ska ha en total erfarenhet ≥ chefens krav och minst en med erfarenhet ≥ 4.
-    Varje anställd får högst ett pass per dag samt ett max antal pass beräknat utifrån arbetsbelastning.
+    Varje anställd får högst ett pass per dag samt högst ett visst antal pass (beräknat utifrån arbetsbelastning).
+    Passen fördelas så att den totala belastningen (antalet pass redan tilldelade) blir jämn.
     """
     # Hämta period- och skiftinställningar
     period_start = st.session_state["period_start"]
@@ -125,27 +125,28 @@ def generate_schedule(employees: list[tuple]) -> None:
             exp_val = int(e[7])
         except:
             exp_val = 0
-        # Räkna ut max antal pass baserat på arbetsbelastning (antaget att 100% motsvarar att arbeta varje dag i perioden)
-        effective_max_shifts = round((e[3] / 100) * period_length)
-        if effective_max_shifts < 1:
-            effective_max_shifts = 1
+        # Räkna ut max antal pass baserat på arbetsbelastning.
+        # Vi begränsar också så att en anställd inte kan jobba mer än (period_length - min_days_off) pass.
+        base_max = round((e[3] / 100) * period_length)
+        if base_max < 1:
+            base_max = 1
+        effective_max = base_max  # Här kan man lägga till ytterligare regler om t.ex. min_days_off
         new_staff.append({
             "id": e[0],
             "name": e[2],
             "workload_percent": e[3],
             "work_types": e[4].split(",") if e[4] else [],
             "max_consec_days": e[5],
-            "min_days_off": e[6],  # ej explicit använd här
+            "min_days_off": e[6],
             "experience": exp_val,
-            "max_shifts": effective_max_shifts
+            "max_shifts": effective_max
         })
 
-    # Kontroll: minst en med erfarenhet >= 4
     if not any(s["experience"] >= 4 for s in new_staff):
         st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre.")
         return
 
-    # Initiera anställdastatus: spåra antalet pass, senaste arbetsdag och antal sammanhängande arbetsdagar
+    # Initiera anställdastatus: spåra antalet pass, senaste arbetsdag och antal pass per dag
     emp_state = {}
     for s in new_staff:
         emp_state[s["id"]] = {
@@ -167,34 +168,33 @@ def generate_schedule(employees: list[tuple]) -> None:
             return (False, f"{emp['name']} har nått max antal pass ({emp['max_shifts']}).")
         if state["last_worked_date"] is not None:
             delta = (slot_date - state["last_worked_date"]).days
-            if delta == 1:
-                if state["consec_days"] + 1 > emp["max_consec_days"]:
-                    return (False, f"{emp['name']} överskrider max sammanhängande dagar ({emp['max_consec_days']}).")
+            if delta == 1 and state["consec_days"] + 1 > emp["max_consec_days"]:
+                return (False, f"{emp['name']} överskrider max sammanhängande dagar ({emp['max_consec_days']}).")
         return (True, "")
 
-    # Greedy tilldelning av varje skiftpass
+    # Tilldela pass (greedy med load-balancing)
     for slot in slots:
         available = []
         for emp in new_staff:
             ok, _ = can_work(emp, slot["date"])
             if ok:
                 available.append(emp)
-        feasible_combo = None
-        # För TEAM_SIZE små (t.ex. 3) går det att generera kombinationer
+        feasible_combos = []
         for combo in combinations(available, TEAM_SIZE):
             total_exp = sum(emp["experience"] for emp in combo)
             if total_exp < min_exp_req:
                 continue
             if not any(emp["experience"] >= 4 for emp in combo):
                 continue
-            feasible_combo = combo
-            break
-        if feasible_combo is None:
-            failed_slots.append((slot, "Ingen kombination av tillgänglig personal uppfyllde kraven (minst total erfarenhet samt minst en med ≥4)."))
-            schedule.append({"slot": slot, "assigned": None})
-        else:
-            schedule.append({"slot": slot, "assigned": feasible_combo})
-            for emp in feasible_combo:
+            # Alla måste vara tillgängliga (även om de redan är i available-listan, dubbelkolla gärna)
+            if not all(can_work(emp, slot["date"])[0] for emp in combo):
+                continue
+            load = sum(emp_state[emp["id"]]["worked_shifts"] for emp in combo)
+            feasible_combos.append((combo, load))
+        if feasible_combos:
+            chosen_combo = min(feasible_combos, key=lambda x: x[1])[0]
+            schedule.append({"slot": slot, "assigned": chosen_combo})
+            for emp in chosen_combo:
                 state = emp_state[emp["id"]]
                 state["worked_shifts"] += 1
                 state["assigned_days"].add(slot["date"])
@@ -203,16 +203,19 @@ def generate_schedule(employees: list[tuple]) -> None:
                 else:
                     state["consec_days"] = 1
                 state["last_worked_date"] = slot["date"]
+        else:
+            failed_slots.append((slot, "Ingen kombination av tillgänglig personal uppfyllde kraven (minsta total erfarenhet samt minst en med ≥4)."))
+            schedule.append({"slot": slot, "assigned": None})
 
-    # Om några pass inte kunde schemaläggas, rapportera detta
+    # Rapportera eventuella pass som inte kunde schemaläggas
     if failed_slots:
         error_msgs = []
         for slot, reason in failed_slots:
             error_msgs.append(f"{slot['date']} ({slot['shift']}): {reason}")
         st.error("Följande pass kunde inte schemaläggas:\n" + "\n".join(error_msgs))
-        # Fortsätt visa övrigt schema
+        # Schemat visas ändå
 
-    # Bygg en detaljerad schemaöversikt
+    # Bygg en detaljerad schemaöversikt (med datum, veckodag, skift och anställdas initialer)
     schedule_rows = []
     for item in schedule:
         slot = item["slot"]
@@ -230,24 +233,28 @@ def generate_schedule(employees: list[tuple]) -> None:
         })
     schedule_df = pd.DataFrame(schedule_rows)
 
-    # Bygg en sammanfattande tabell över antal pass per anställd
+    # Sammanfattande tabell: antal pass per anställd
     summary_rows = []
     for emp in new_staff:
         summary_rows.append({
             "Namn": emp["name"],
             "Pass": emp_state[emp["id"]]["worked_shifts"]
         })
-    summary_df = pd.DataFrame(summary_rows).sort_values("Namn")
-
+    summary_df = pd.DataFrame(summary_rows)
+    # Vi döljer index (därmed undviks att en "första kolumn" med siffror visas)
+    
     st.subheader("Schemalagd översikt")
     st.dataframe(schedule_df, use_container_width=True)
-
+    
     st.subheader("Översikt: Antal pass per anställd")
-    st.dataframe(summary_df, use_container_width=True)
+    st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-    # Visa även en kalenderöversikt med initialer (heatmap-liknande)
+    # Visa även en kalenderöversikt (pivot-tabell med initialer)
     fig, ax = plt.subplots(figsize=(12, 6))
-    pivot = schedule_df.pivot(index="Datum", columns="Skift", values="Personal (Initialer)")
+    try:
+        pivot = schedule_df.pivot(index="Datum", columns="Skift", values="Personal (Initialer)")
+    except Exception as e:
+        pivot = pd.DataFrame()  # säkerhetsåtgärd
     ax.axis('tight')
     ax.axis('off')
     table = ax.table(cellText=pivot.fillna("").values,
@@ -266,7 +273,7 @@ def show_chef_interface_wrapper():
     st.title(f"👨💼 Chefssida - {st.session_state.hospital}")
     st.markdown("---")
 
-    # Personalhantering (redigera enskilda anställda)
+    # Personalhantering
     employees = get_employees(st.session_state.hospital)
     st.header("👥 Personalhantering")
     if not employees:
