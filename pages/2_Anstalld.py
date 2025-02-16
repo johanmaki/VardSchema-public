@@ -50,6 +50,9 @@ def save_preferences(data):
 
 def main_employee_interface():
     """Huvudgränssnitt för anställda – ingen åtkomstkontroll här."""
+    if 'hospital' not in st.session_state:  # Check if hospital is in session state
+        st.title("Vänligen logga in")  # Prompt for login if session state is empty
+        return  # Exit the function if not logged in
     st.title(f"🧑⚕️ Anställdsida - {st.session_state.hospital}")
     st.markdown("---")
 
