@@ -1,9 +1,13 @@
 # pages/1_Chefsida.py
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from database import get_employees, update_employee
 from datetime import datetime
+import math
+from itertools import combinations
+
+from database import get_employees, update_employee
 
 # Function to set up page configuration
 def setup_page():
@@ -24,7 +28,7 @@ LANGUAGES = {
         "title": "AI-drivet Schemaläggningssystem",
         "days": ["Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag", "Lördag", "Söndag"],
         "experience_labels": {
-            1: "1 - Nyexaminerad", 
+            1: "1 - Nyexaminerad",
             2: "2 - Grundläggande",
             3: "3 - Erfaren",
             4: "4 - Mycket erfaren",
@@ -34,8 +38,10 @@ LANGUAGES = {
     }
 }
 
+# Antal personer vi vill schemalägga per dag (kan justeras)
+TEAM_SIZE = 3
+
 # ========== INITIERING AV SESSION ==========
-# Se till att nödvändiga nycklar finns i sessionen. Ingen rollkontroll görs här.
 def init_session():
     """Initialize session state with required keys."""
     required_keys = ["staff", "dark_mode", "language", "user_type", "hospital"]
@@ -121,7 +127,7 @@ def show_chef_interface():
                     try:
                         update_employee(update_data)
                         st.success("Ändringar sparade!")
-                        st.stop()  # Stop execution instead of rerunning
+                        st.stop()  # Stop execution to prevent double-run
                     except Exception as e:
                         st.error(f"Fel vid uppdatering av anställd: {str(e)}")
     
@@ -157,72 +163,204 @@ def show_chef_interface():
         )
         st.stop()
 
-# ========== SCHEMAGENERERING ==========
+# ========== SCHEMAGENERERING (ADVANCED) ==========
 def generate_schedule(employees: list[tuple]) -> None:
     """
-    Generera schema baserat på anställdas data.
-    
-    Args:
-        employees (list[tuple]): En lista med anställdas data.
-    
-    Raises:
-        ValueError: Om ingen anställd har tillräcklig erfarenhet.
+    Generera schema för 7 dagar (Mån-Sön) baserat på anställdas data.
+    Tar hänsyn till:
+      - Minst en med experience >= 4 per dag
+      - max_consec_days
+      - min_days_off
+      - Arbetsbelastning i % (workload) -> max antal arbetsdagar av 7
+    Använder en backtracking-algoritm.
     """
-    try:
-        # Konvertera anställdas data till en lista med dictionaries
-        staff = [{
+
+    # 1) Konvertera anställdas data till en lista med dictionaries
+    staff = []
+    for e in employees:
+        # Beräkna max tillåtna arbetsdagar (avrundat)
+        max_work_days = round((e[3] / 100) * 7)  # e[3] = workload i %
+        if max_work_days < 1:
+            max_work_days = 1  # Se till att minst 1 dag är möjlig om workload >= 50
+
+        staff.append({
+            "id": e[0],
             "name": e[2],
-            "experience": int(e[7]) if isinstance(e[7], (int, str)) and str(e[7]).isdigit() else 0,
+            "workload_percent": e[3],
             "work_types": e[4].split(",") if e[4] else [],
             "max_consec_days": e[5],
-            "min_days_off": e[6]
-        } for e in employees]
+            "min_days_off": e[6],
+            "experience": int(e[7]) if isinstance(e[7], (int, str)) and str(e[7]).isdigit() else 0,
+            "max_work_days": max_work_days
+        })
 
-        # Kontroll: minst en anställd måste ha erfarenhet >= 4
-        if not any(emp["experience"] >= 4 for emp in staff):
-            st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre för att utse en ledningsansvarig.")
-            return
+    days = LANGUAGES["sv"]["days"]  # ["Måndag", "Tisdag", ... "Söndag"]
 
-        days = LANGUAGES["sv"]["days"]
-        schedule_data = []
-        eligible = [emp for emp in staff if emp["experience"] >= 4]
-        # Skapa schema för varje dag
-        for i, day in enumerate(days):
-            leader = eligible[i % len(eligible)] if eligible else None
-            leader_name = leader['name'].replace(" ★", "") if leader else "Ingen ledare"
-            all_staff = [emp["name"] for emp in staff]
-            schedule_data.append({
-                "Dag": day,
-                "Ledningsansvarig": leader_name,
-                "Personal": ", ".join(all_staff),
-                "Poäng": len(all_staff)  # Dummy-poäng baserat på antalet anställda
-            })
-        schedule_df = pd.DataFrame(schedule_data)
-        
-        # Visa schema med bakgrundsgradient på den numeriska kolumnen "Poäng"
-        st.dataframe(
-            schedule_df.style.background_gradient(subset=["Poäng"], cmap="YlGnBu"),
-            hide_index=True,
-            use_container_width=True
-        )
+    # Kontroll: finns åtminstone en med experience >= 4 totalt?
+    if not any(s["experience"] >= 4 for s in staff):
+        st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre.")
+        return
 
-        # Visuell representation med stapeldiagram
-        fig, ax = plt.subplots()
-        # Använd numeriska x-värden och sätt sedan x-tick etiketter
-        x = range(len(schedule_df))
-        ax.bar(
-            x,
-            schedule_df["Poäng"],
-            color=THEME_COLORS["dark" if st.session_state.dark_mode else "light"]["primary"]
-        )
-        ax.set_xticks(x)
-        ax.set_xticklabels(schedule_df["Dag"])
-        ax.set_ylabel("Poäng")
-        ax.set_title("Antal anställda per dag")
-        st.pyplot(fig)
+    # Här lagrar vi det slutliga schemat om vi hittar en lösning
+    final_assignment = [None] * len(days)  # Varje index blir en lista av anställda
 
-    except Exception as e:
-        st.error(f"Kunde inte generera schema: {str(e)}")
+    # State: info om varje anställd under backtracking
+    # (hur många dagar jobbat totalt, hur många dagar i rad, senaste dag man jobbade)
+    staff_state = {}
+    for s in staff:
+        staff_state[s["id"]] = {
+            "worked_days": 0,
+            "consec_days": 0,
+            "last_worked_day": -999  # inget datum
+        }
+
+    # En hjälp-funktion för att kolla om en anställd kan jobba en viss dag
+    def can_work(emp, day_idx):
+        """
+        Kollar om 'emp' kan schemaläggas day_idx givet staff_state + constraints.
+        """
+        st_state = staff_state[emp["id"]]
+
+        # Har personen redan nått sitt max antal arbetsdagar?
+        if st_state["worked_days"] >= emp["max_work_days"]:
+            return False
+
+        # Om de jobbade igår (day_idx - 1 == last_worked_day), checka max_consec_days
+        # Om de inte jobbade igår, nollställs consecutive days när vi lägger in dem igen.
+        # MEN vi måste också checka min_days_off.
+        days_since_worked = day_idx - st_state["last_worked_day"] - 1
+
+        # Kolla om de inte har haft tillräcklig vila
+        if days_since_worked < emp["min_days_off"]:
+            return False
+
+        # Kolla om de redan jobbat X dagar i rad och inte haft vila
+        # Om de jobbade igår => consecutive = st_state["consec_days"] + 1
+        # Om de inte jobbade igår => consecutive = 1
+        # Men vi kan inte bara kolla st_state["consec_days"], för den nollställs först
+        # när de faktiskt är lediga en dag. Se logik i assign() nedan.
+
+        # Prova hur många i rad det skulle bli om vi sätter dem idag:
+        potential_consec = 1
+        if day_idx == st_state["last_worked_day"] + 1:
+            # då fortsätter de i rad
+            potential_consec = st_state["consec_days"] + 1
+
+        if potential_consec > emp["max_consec_days"]:
+            return False
+
+        return True
+
+    # Funktionen som "lägger in" en anställd i schemat för day_idx och uppdaterar staff_state
+    def assign_employee(emp, day_idx):
+        """Uppdatera staff_state när en anställd emp läggs in på day_idx."""
+        st_state = staff_state[emp["id"]]
+        # Räkna ut om vi fortsätter i rad eller inte
+        if day_idx == st_state["last_worked_day"] + 1:
+            st_state["consec_days"] += 1
+        else:
+            st_state["consec_days"] = 1  # startar en ny kedja
+
+        st_state["worked_days"] += 1
+        st_state["last_worked_day"] = day_idx
+
+    # Funktionen som "tar bort" en anställd från day_idx (backtrack) och återställer staff_state
+    def unassign_employee(emp, prev_state):
+        """Återställ staff_state när vi backar."""
+        staff_state[emp["id"]] = prev_state
+
+    # Backtracking-funktion
+    def backtrack(day_idx):
+        """Försök fylla dag day_idx. Om vi kommer förbi sista dagen -> True (klar)."""
+        if day_idx == len(days):
+            return True  # alla dagar klara
+
+        # Vi vill välja TEAM_SIZE anställda för day_idx.
+        # Constraint: minst 1 med experience >= 4
+        possible_combos = combinations(staff, TEAM_SIZE)
+
+        for combo in possible_combos:
+            # Kolla om minst en har experience >= 4
+            if not any(e["experience"] >= 4 for e in combo):
+                continue
+
+            # Kolla om alla i combo är "can_work" day_idx
+            # och att de inte krockar med varandra på något sätt
+            # (i detta exempel antar vi att krockar ej finns om de uppfyller individuella constraints)
+            feasible = True
+            saved_states = {}
+            for e in combo:
+                if not can_work(e, day_idx):
+                    feasible = False
+                    break
+
+            if not feasible:
+                continue
+
+            # Om det är genomförbart, "lägg in" dem
+            for e in combo:
+                saved_states[e["id"]] = staff_state[e["id"]].copy()  # spara för unassign
+                assign_employee(e, day_idx)
+
+            # Sätt final_assignment
+            final_assignment[day_idx] = combo
+
+            # Fortsätt till nästa dag
+            if backtrack(day_idx + 1):
+                return True
+            else:
+                # Backa (unassign)
+                for e in combo:
+                    unassign_employee(e, saved_states[e["id"]])
+
+        return False
+
+    # Kör backtracking
+    found_solution = backtrack(0)
+
+    if not found_solution:
+        st.error("Kunde inte hitta ett giltigt schema givet alla constraints.")
+        return
+
+    # Bygg DataFrame av final_assignment
+    schedule_rows = []
+    for i, combo in enumerate(final_assignment):
+        day_name = days[i]
+        # Samma "combo" är en tuple av anställda
+        names = [emp["name"] for emp in combo]
+        total_exp = sum(emp["experience"] for emp in combo)
+        # Markera ledare (minst en har >= 4, men vi kan t.ex. bara markera alla med >=4)
+        leaders = [emp["name"] for emp in combo if emp["experience"] >= 4]
+
+        schedule_rows.append({
+            "Dag": day_name,
+            "Personal": ", ".join(names),
+            "Ledare": ", ".join(leaders),
+            "Poäng": total_exp
+        })
+
+    schedule_df = pd.DataFrame(schedule_rows)
+
+    # Visa schema
+    st.dataframe(
+        schedule_df.style.background_gradient(subset=["Poäng"], cmap="YlGnBu"),
+        hide_index=True,
+        use_container_width=True
+    )
+
+    # Visa stapeldiagram
+    fig, ax = plt.subplots()
+    x = range(len(schedule_df))
+    ax.bar(
+        x,
+        schedule_df["Poäng"],
+        color=THEME_COLORS["dark" if st.session_state.dark_mode else "light"]["primary"]
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(schedule_df["Dag"])
+    ax.set_ylabel("Summa erfarenhetspoäng")
+    ax.set_title("Erfarenhetspoäng per dag")
+    st.pyplot(fig)
 
 # Anropa chefsidans gränssnitt så att sidan renderas
 show_chef_interface()
