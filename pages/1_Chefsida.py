@@ -3,6 +3,7 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
+import random
 from datetime import datetime
 import math
 from itertools import combinations
@@ -44,13 +45,14 @@ TEAM_SIZE = 3
 # ========== INITIERING AV SESSION ==========
 def init_session():
     """Initialize session state with required keys."""
-    required_keys = ["staff", "dark_mode", "language", "user_type", "hospital"]
+    required_keys = ["staff", "dark_mode", "language", "user_type", "hospital", "min_experience_req"]
     defaults = {
         "staff": [],
         "dark_mode": False,
         "language": "sv",
         "user_type": "chef",
-        "hospital": "Karolinska"
+        "hospital": "Karolinska",
+        "min_experience_req": 10  # Default min. erfarenhetspoäng per dag
     }
     for key in required_keys:
         if key not in st.session_state:
@@ -94,7 +96,7 @@ def show_chef_interface():
                     new_exp = st.selectbox(
                         "Erfarenhetsnivå",
                         options=list(lang["experience_labels"].keys()),
-                        index=emp_data[7]-1,
+                        index=emp_data[7]-1 if emp_data[7] else 0,
                         format_func=lambda x: lang["experience_labels"][x]
                     )
                     
@@ -147,6 +149,15 @@ def show_chef_interface():
         )
     
     st.markdown("---")
+    
+    # Låt chefen ange minsta totala erfarenhetspoäng per dag
+    st.subheader("Inställningar för schemagenerering")
+    min_exp_req = st.number_input(
+        "Minsta totala erfarenhetspoäng per dag",
+        min_value=0, max_value=100, value=st.session_state["min_experience_req"]
+    )
+    st.session_state["min_experience_req"] = min_exp_req
+
     # Schemagenerering
     st.header("📅 Schemagenerering")
     if st.button("🚀 Generera schema"):
@@ -172,16 +183,26 @@ def generate_schedule(employees: list[tuple]) -> None:
       - max_consec_days
       - min_days_off
       - Arbetsbelastning i % (workload) -> max antal arbetsdagar av 7
+      - Minsta totala erfarenhetspoäng (chefens krav)
     Använder en backtracking-algoritm.
     """
+    days = LANGUAGES["sv"]["days"]  # ["Måndag", "Tisdag", ... "Söndag"]
+    min_exp_req = st.session_state.get("min_experience_req", 10)
 
     # 1) Konvertera anställdas data till en lista med dictionaries
     staff = []
     for e in employees:
+        # e[3] = workload i %
         # Beräkna max tillåtna arbetsdagar (avrundat)
-        max_work_days = round((e[3] / 100) * 7)  # e[3] = workload i %
+        max_work_days = round((e[3] / 100) * 7)
         if max_work_days < 1:
-            max_work_days = 1  # Se till att minst 1 dag är möjlig om workload >= 50
+            max_work_days = 1
+
+        # Försök läsa erfarenhetsnivå ordentligt
+        try:
+            exp_val = int(e[7])
+        except:
+            exp_val = 0
 
         staff.append({
             "id": e[0],
@@ -190,60 +211,45 @@ def generate_schedule(employees: list[tuple]) -> None:
             "work_types": e[4].split(",") if e[4] else [],
             "max_consec_days": e[5],
             "min_days_off": e[6],
-            "experience": int(e[7]) if isinstance(e[7], (int, str)) and str(e[7]).isdigit() else 0,
+            "experience": exp_val,
             "max_work_days": max_work_days
         })
-
-    days = LANGUAGES["sv"]["days"]  # ["Måndag", "Tisdag", ... "Söndag"]
 
     # Kontroll: finns åtminstone en med experience >= 4 totalt?
     if not any(s["experience"] >= 4 for s in staff):
         st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre.")
         return
 
-    # Här lagrar vi det slutliga schemat om vi hittar en lösning
     final_assignment = [None] * len(days)  # Varje index blir en lista av anställda
 
     # State: info om varje anställd under backtracking
-    # (hur många dagar jobbat totalt, hur många dagar i rad, senaste dag man jobbade)
     staff_state = {}
     for s in staff:
         staff_state[s["id"]] = {
             "worked_days": 0,
             "consec_days": 0,
-            "last_worked_day": -999  # inget datum
+            "last_worked_day": -999  # ingen tidigare arbetsdag
         }
 
-    # En hjälp-funktion för att kolla om en anställd kan jobba en viss dag
     def can_work(emp, day_idx):
         """
         Kollar om 'emp' kan schemaläggas day_idx givet staff_state + constraints.
         """
         st_state = staff_state[emp["id"]]
 
-        # Har personen redan nått sitt max antal arbetsdagar?
+        # 1) Kolla om personen redan nått sitt max antal arbetsdagar
         if st_state["worked_days"] >= emp["max_work_days"]:
             return False
 
-        # Om de jobbade igår (day_idx - 1 == last_worked_day), checka max_consec_days
-        # Om de inte jobbade igår, nollställs consecutive days när vi lägger in dem igen.
-        # MEN vi måste också checka min_days_off.
+        # 2) min_days_off: räkna hur många dagar sedan man sist jobbade
         days_since_worked = day_idx - st_state["last_worked_day"] - 1
-
-        # Kolla om de inte har haft tillräcklig vila
         if days_since_worked < emp["min_days_off"]:
+            # Personen har inte vilat tillräckligt
             return False
 
-        # Kolla om de redan jobbat X dagar i rad och inte haft vila
-        # Om de jobbade igår => consecutive = st_state["consec_days"] + 1
-        # Om de inte jobbade igår => consecutive = 1
-        # Men vi kan inte bara kolla st_state["consec_days"], för den nollställs först
-        # när de faktiskt är lediga en dag. Se logik i assign() nedan.
-
-        # Prova hur många i rad det skulle bli om vi sätter dem idag:
+        # 3) max_consec_days: om personen jobbade igår, öka i rad, annars starta ny rad
         potential_consec = 1
         if day_idx == st_state["last_worked_day"] + 1:
-            # då fortsätter de i rad
             potential_consec = st_state["consec_days"] + 1
 
         if potential_consec > emp["max_consec_days"]:
@@ -251,42 +257,47 @@ def generate_schedule(employees: list[tuple]) -> None:
 
         return True
 
-    # Funktionen som "lägger in" en anställd i schemat för day_idx och uppdaterar staff_state
     def assign_employee(emp, day_idx):
-        """Uppdatera staff_state när en anställd emp läggs in på day_idx."""
+        """
+        Uppdatera staff_state när en anställd emp läggs in på day_idx.
+        """
         st_state = staff_state[emp["id"]]
-        # Räkna ut om vi fortsätter i rad eller inte
         if day_idx == st_state["last_worked_day"] + 1:
             st_state["consec_days"] += 1
         else:
-            st_state["consec_days"] = 1  # startar en ny kedja
-
+            st_state["consec_days"] = 1
         st_state["worked_days"] += 1
         st_state["last_worked_day"] = day_idx
 
-    # Funktionen som "tar bort" en anställd från day_idx (backtrack) och återställer staff_state
     def unassign_employee(emp, prev_state):
-        """Återställ staff_state när vi backar."""
+        """
+        Återställ staff_state när vi backar (tar bort).
+        """
         staff_state[emp["id"]] = prev_state
 
-    # Backtracking-funktion
     def backtrack(day_idx):
-        """Försök fylla dag day_idx. Om vi kommer förbi sista dagen -> True (klar)."""
+        """
+        Försök fylla dag day_idx. Om vi kommer förbi sista dagen -> True (klar).
+        """
         if day_idx == len(days):
             return True  # alla dagar klara
 
-        # Vi vill välja TEAM_SIZE anställda för day_idx.
-        # Constraint: minst 1 med experience >= 4
-        possible_combos = combinations(staff, TEAM_SIZE)
+        # Skapa alla möjliga kombinationer av personal med storlek TEAM_SIZE
+        # Vi blandar ordningen slumpmässigt för att få mer variation
+        combo_list = list(combinations(staff, TEAM_SIZE))
+        random.shuffle(combo_list)  # slumpa ordningen
 
-        for combo in possible_combos:
-            # Kolla om minst en har experience >= 4
+        for combo in combo_list:
+            # Krav: minst en har experience >= 4
             if not any(e["experience"] >= 4 for e in combo):
                 continue
 
-            # Kolla om alla i combo är "can_work" day_idx
-            # och att de inte krockar med varandra på något sätt
-            # (i detta exempel antar vi att krockar ej finns om de uppfyller individuella constraints)
+            # Krav: sum of experience >= min_exp_req
+            total_exp = sum(e["experience"] for e in combo)
+            if total_exp < min_exp_req:
+                continue
+
+            # Kolla om alla kan arbeta idag
             feasible = True
             saved_states = {}
             for e in combo:
@@ -297,19 +308,18 @@ def generate_schedule(employees: list[tuple]) -> None:
             if not feasible:
                 continue
 
-            # Om det är genomförbart, "lägg in" dem
+            # "Lägg in" dem för day_idx
             for e in combo:
-                saved_states[e["id"]] = staff_state[e["id"]].copy()  # spara för unassign
+                saved_states[e["id"]] = staff_state[e["id"]].copy()
                 assign_employee(e, day_idx)
 
-            # Sätt final_assignment
             final_assignment[day_idx] = combo
 
             # Fortsätt till nästa dag
             if backtrack(day_idx + 1):
                 return True
             else:
-                # Backa (unassign)
+                # Backa (unassign) om vi inte lyckas fylla resterande dagar
                 for e in combo:
                     unassign_employee(e, saved_states[e["id"]])
 
@@ -326,10 +336,9 @@ def generate_schedule(employees: list[tuple]) -> None:
     schedule_rows = []
     for i, combo in enumerate(final_assignment):
         day_name = days[i]
-        # Samma "combo" är en tuple av anställda
         names = [emp["name"] for emp in combo]
         total_exp = sum(emp["experience"] for emp in combo)
-        # Markera ledare (minst en har >= 4, men vi kan t.ex. bara markera alla med >=4)
+        # Markera ledare (alla med experience >= 4)
         leaders = [emp["name"] for emp in combo if emp["experience"] >= 4]
 
         schedule_rows.append({
