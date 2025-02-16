@@ -84,5 +84,15 @@ def update_employee(data):
     conn.commit()
     conn.close()
 
+def delete_employee(employee_id):
+    import sqlite3
+    from database import DB_NAME
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM employees WHERE id=?", (employee_id,))
+    conn.commit()
+    conn.close()
+
+
 # Initiera databasen vid första import
 init_db()
