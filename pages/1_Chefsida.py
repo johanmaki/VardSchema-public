@@ -5,8 +5,13 @@ import matplotlib.pyplot as plt
 from database import get_employees, update_employee
 from datetime import datetime
 
-# Ställ in sidkonfigurationen (måste vara det första st-kommandot)
-st.set_page_config(page_title="Chefsida", layout="wide")
+# Function to set up page configuration
+def setup_page():
+    """Set up the Streamlit page configuration."""
+    st.set_page_config(page_title="Chefsida", layout="wide")
+
+# Call the setup function
+setup_page()
 
 # ========== KONFIGURATION ==========
 THEME_COLORS = {
@@ -32,23 +37,22 @@ LANGUAGES = {
 # ========== INITIERING AV SESSION ==========
 # Se till att nödvändiga nycklar finns i sessionen. Ingen rollkontroll görs här.
 def init_session():
+    """Initialize session state with required keys."""
     required_keys = ["staff", "dark_mode", "language", "user_type", "hospital"]
+    defaults = {
+        "staff": [],
+        "dark_mode": False,
+        "language": "sv",
+        "user_type": "chef",
+        "hospital": "Karolinska"
+    }
     for key in required_keys:
         if key not in st.session_state:
-            if key == "staff":
-                st.session_state[key] = []
-            elif key == "dark_mode":
-                st.session_state[key] = False
-            elif key == "language":
-                st.session_state[key] = "sv"
-            elif key == "user_type":
-                # Sätt ett standardvärde – nu spelar det ingen roll vilken roll användaren har
-                st.session_state[key] = "chef"
-            elif key == "hospital":
-                st.session_state[key] = "Karolinska"
+            st.session_state[key] = defaults[key]
 
 # ========== CHEFSGRÄNSSNITT ==========
 def show_chef_interface():
+    """Display the chef interface."""
     init_session()
     lang = LANGUAGES["sv"]
     
@@ -154,12 +158,21 @@ def show_chef_interface():
         st.stop()
 
 # ========== SCHEMAGENERERING ==========
-def generate_schedule(employees):
+def generate_schedule(employees: list[tuple]) -> None:
+    """
+    Generera schema baserat på anställdas data.
+    
+    Args:
+        employees (list[tuple]): En lista med anställdas data.
+    
+    Raises:
+        ValueError: Om ingen anställd har tillräcklig erfarenhet.
+    """
     try:
         # Konvertera anställdas data till en lista med dictionaries
         staff = [{
             "name": e[2],
-            "experience": e[7],
+            "experience": int(e[7]) if isinstance(e[7], (int, str)) and str(e[7]).isdigit() else 0,
             "work_types": e[4].split(",") if e[4] else [],
             "max_consec_days": e[5],
             "min_days_off": e[6]
@@ -173,30 +186,39 @@ def generate_schedule(employees):
         days = LANGUAGES["sv"]["days"]
         schedule_data = []
         eligible = [emp for emp in staff if emp["experience"] >= 4]
+        # Skapa schema för varje dag
         for i, day in enumerate(days):
             leader = eligible[i % len(eligible)] if eligible else None
-            leader_name = leader['name'].replace(" ★", "") if leader else "Ingen ledare"  # Remove special character
-            all_staff = ", ".join([emp["name"] for emp in staff])
+            leader_name = leader['name'].replace(" ★", "") if leader else "Ingen ledare"
+            all_staff = [emp["name"] for emp in staff]
             schedule_data.append({
                 "Dag": day,
                 "Ledningsansvarig": leader_name,
-                "Personal": all_staff
+                "Personal": ", ".join(all_staff),
+                "Poäng": len(all_staff)  # Dummy-poäng baserat på antalet anställda
             })
         schedule_df = pd.DataFrame(schedule_data)
+        
+        # Visa schema med bakgrundsgradient på den numeriska kolumnen "Poäng"
         st.dataframe(
-            schedule_df.style.background_gradient(subset=["Ledningsansvarig"], cmap="YlGnBu"),
+            schedule_df.style.background_gradient(subset=["Poäng"], cmap="YlGnBu"),
             hide_index=True,
             use_container_width=True
         )
 
-        # Visuell representation (exempel med dummy-poäng)
+        # Visuell representation med stapeldiagram
         fig, ax = plt.subplots()
-        schedule_df["Poäng"] = schedule_df["Personal"].apply(lambda x: len(x))
+        # Använd numeriska x-värden och sätt sedan x-tick etiketter
+        x = range(len(schedule_df))
         ax.bar(
-            schedule_df["Dag"],
+            x,
             schedule_df["Poäng"],
             color=THEME_COLORS["dark" if st.session_state.dark_mode else "light"]["primary"]
         )
+        ax.set_xticks(x)
+        ax.set_xticklabels(schedule_df["Dag"])
+        ax.set_ylabel("Poäng")
+        ax.set_title("Antal anställda per dag")
         st.pyplot(fig)
 
     except Exception as e:
