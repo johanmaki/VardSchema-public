@@ -150,8 +150,9 @@ def main_employee_interface():
     st.markdown("---")
     # Utloggningsknapp
     if st.button("🚪 Logga ut"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
+        if st.session_state:  # Check if session state is not empty
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
         st.experimental_rerun()
 
 def show():
