@@ -326,7 +326,7 @@ def show_chef_interface_wrapper():
         if st.button("Ta bort anställd"):
             delete_id = emp_options[to_delete]
             remove_employee(delete_id)
-            st.experimental_rerun()
+           # st.experimental_rerun() 
     else:
         st.info("Inga anställda finns att hantera.")
     
@@ -369,7 +369,7 @@ def show_chef_interface_wrapper():
                     try:
                         update_employee(update_data)
                         st.success("Ändringar sparade!")
-                        st.experimental_rerun()
+                       # st.experimental_rerun()
                     except Exception as e:
                         st.error(f"Fel vid uppdatering av anställd: {str(e)}")
     
