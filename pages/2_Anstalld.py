@@ -150,13 +150,15 @@ def main_employee_interface():
     st.markdown("---")
     # Utloggningsknapp
     if st.button("🚪 Logga ut"):
-        if st.session_state:  # Check if session state is not empty
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.experimental_rerun()
 
 def show():
     # Ingen autentiseringskontroll – alla får se sidan
-    main_employee_interface()
+    if 'hospital' in st.session_state:  # Check if hospital is in session state
+        main_employee_interface()
+    else:
+        st.title("Vänligen logga in")  # Prompt for login if session state is empty
 
 show()
