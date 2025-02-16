@@ -38,16 +38,14 @@ LANGUAGES = {
     }
 }
 
-# Teamstorlek per pass (antal anställda per skift)
-TEAM_SIZE = 3
-
 # ---------- INITIERING AV SESSION ----------
 def init_session():
     """Initialiserar sessionen med nödvändiga nycklar."""
     required_keys = [
         "staff", "dark_mode", "language", "user_type", "hospital", "min_experience_req",
         "period_start", "period_length",
-        "morning_start", "morning_end", "em_start", "em_end", "night_start", "night_end"
+        "morning_start", "morning_end", "em_start", "em_end", "night_start", "night_end",
+        "team_size"
     ]
     defaults = {
         "staff": [],
@@ -55,15 +53,16 @@ def init_session():
         "language": "sv",
         "user_type": "chef",
         "hospital": "Karolinska",
-        "min_experience_req": 10,  # Minsta totala erfarenhetspoäng per pass
+        "min_experience_req": 10,        # Minsta totala erfarenhetspoäng per pass
         "period_start": datetime(2025, 2, 16).date(),
-        "period_length": 60,       # Schemaläggningsperiod i dagar
+        "period_length": 60,             # Schemaläggningsperiod i dagar
         "morning_start": "06:00",
         "morning_end": "14:00",
         "em_start": "14:00",
         "em_end": "22:00",
         "night_start": "22:00",
-        "night_end": "06:00"
+        "night_end": "06:00",
+        "team_size": 3                   # Standardantal anställda per pass
     }
     for key in required_keys:
         if key not in st.session_state:
@@ -83,10 +82,11 @@ def remove_employee(employee_id):
         from database import delete_employee  # Se till att delete_employee() finns i database.py
         delete_employee(employee_id)
         st.success("Anställd togs bort.")
-        #st.experimental_rerun()
+        st.experimental_rerun()
     except Exception as e:
         st.error(f"Fel vid borttagning: {str(e)}")
 
+# ---------- FUNKTIONER FÖR DAGSBASERAD SCHEMAGENERERING ----------
 def can_work(emp, day, emp_state, shift_type):
     """
     Kontrollerar om en anställd kan arbeta på given dag.
@@ -104,19 +104,21 @@ def can_work(emp, day, emp_state, shift_type):
             return (False, f"{emp['name']} överskrider max sammanhängande dagar ({emp['max_consec_days']}).")
     return (True, "")
 
-def assign_shifts_for_day_greedy(day, shifts, available, emp_state, min_exp_req):
+def assign_shifts_for_day_greedy(day, shifts, available, emp_state, min_exp_req, team_size):
     """
-    Tilldelar pass för en given dag, iterativt för varje skift.
-    Varje pass (skift) försöker fyllas med en kombination av TEAM_SIZE anställda
-    från 'available' (de som ännu inte fått ett pass den dagen).
-    Uppdaterar emp_state med tilldelningar.
-    Returnerar en lista med tuples (shift, team) – där team kan vara None om passet inte fylls.
+    Tilldelar pass för en given dag (för varje skift) med en greedy, load-balancerad strategi.
+    För varje skift går vi igenom alla möjliga kombinationer (från de anställda i 'available')
+    och väljer den med lägst total belastning (summan av redan tilldelade pass).
+    Returnerar en lista med tuples (shift, team) där team kan vara None om passet inte kan fyllas.
+    Uppdaterar även emp_state.
     """
     assignments = []
+    # Slumpa ordningen på available för att undvika alltid samma ordning
+    random.shuffle(available)
     for shift in shifts:
-        assigned = None
-        # För varje skift, gå igenom alla kombinationer från available
-        for combo in combinations(available, TEAM_SIZE):
+        best_combo = None
+        best_load = None
+        for combo in combinations(available, team_size):
             total_exp = sum(emp["experience"] for emp in combo)
             if total_exp < min_exp_req:
                 continue
@@ -130,8 +132,13 @@ def assign_shifts_for_day_greedy(day, shifts, available, emp_state, min_exp_req)
                     break
             if not valid:
                 continue
-            # Om giltigt, uppdatera emp_state för varje anställd i combo
-            for emp in combo:
+            load = sum(emp_state[emp["id"]]["worked_shifts"] for emp in combo)
+            if best_combo is None or load < best_load:
+                best_combo = combo
+                best_load = load
+        if best_combo is not None:
+            # Uppdatera emp_state för varje anställd i best_combo
+            for emp in best_combo:
                 state = emp_state[emp["id"]]
                 state["worked_shifts"] += 1
                 state["assigned_days"].add(day)
@@ -140,17 +147,17 @@ def assign_shifts_for_day_greedy(day, shifts, available, emp_state, min_exp_req)
                 else:
                     state["consec_days"] = 1
                 state["last_worked_date"] = day
-            assigned = combo
-            # Ta bort de anställda från available så de inte får mer än ett pass den dagen
-            available = [emp for emp in available if emp not in combo]
-            break
-        assignments.append((shift, assigned))
+            assignments.append((shift, best_combo))
+            # Ta bort de som fått passet från available (max ett pass per dag)
+            available = [emp for emp in available if emp not in best_combo]
+        else:
+            assignments.append((shift, None))
     return assignments, emp_state
 
 # ---------- HUVUDFUNKTION FÖR SCHEMAGENERERING ----------
 def generate_schedule(employees: list[tuple]) -> None:
     """
-    Schemalägger tre skift per dag över en period (ex. två månader).
+    Schemalägger tre skift per dag över en period (exempelvis två månader).
     Varje pass (skift) ska ha:
       - Total erfarenhet ≥ chefens krav (min_exp_req)
       - Minst en anställd med erfarenhet ≥ 4
@@ -160,6 +167,7 @@ def generate_schedule(employees: list[tuple]) -> None:
     period_start = st.session_state["period_start"]
     period_length = st.session_state["period_length"]
     min_exp_req = st.session_state["min_experience_req"]
+    team_size = st.session_state["team_size"]
 
     morning_start = st.session_state["morning_start"]
     morning_end = st.session_state["morning_end"]
@@ -213,7 +221,7 @@ def generate_schedule(employees: list[tuple]) -> None:
         st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre.")
         return
 
-    # Initiera anställdastatus (global state över dagar)
+    # Initiera anställdastatus (emp_state)
     emp_state = {}
     for s in new_staff:
         emp_state[s["id"]] = {
@@ -223,22 +231,22 @@ def generate_schedule(employees: list[tuple]) -> None:
             "assigned_days": set()
         }
 
-    schedule = []    # Lista med schemauppgifter
-    failed_days = {} # Dag -> lista med felmeddelanden
-
+    schedule = []
+    failed_days = {}
     # Processa dag för dag
     for day in dates:
-        available_day = new_staff.copy()  # Varje dag startar med alla anställda som potentiella kandidater
+        available_day = new_staff.copy()
+        # Slumpa ordningen för rätt variation
+        random.shuffle(available_day)
         shifts = daily_shifts[day]
-        assignments, emp_state = assign_shifts_for_day_greedy(day, shifts, available_day, emp_state, min_exp_req)
-        # Om ett skift inte fick tilldelning, notera felmeddelande
+        assignments, emp_state = assign_shifts_for_day_greedy(day, shifts, available_day, emp_state, min_exp_req, team_size)
         for shift, team in assignments:
             if team is None:
                 if day not in failed_days:
                     failed_days[day] = []
                 failed_days[day].append(f"{shift['shift']}: Ingen kombination uppfyllde kraven (minsta total erfarenhet {min_exp_req} samt minst en med ≥4).")
             schedule.append({"slot": shift, "assigned": team})
-
+    
     if failed_days:
         error_msgs = []
         for d, msgs in failed_days.items():
@@ -264,7 +272,6 @@ def generate_schedule(employees: list[tuple]) -> None:
         })
     schedule_df = pd.DataFrame(schedule_rows)
     
-    # Sammanfattning: antal pass per anställd
     summary_rows = []
     for emp in new_staff:
         summary_rows.append({
@@ -311,7 +318,7 @@ def show_chef_interface_wrapper():
         if st.button("Ta bort anställd"):
             delete_id = emp_options[to_delete]
             remove_employee(delete_id)
-            #st.experimental_rerun()
+            st.experimental_rerun()
     else:
         st.info("Inga anställda finns att hantera.")
     
@@ -354,14 +361,13 @@ def show_chef_interface_wrapper():
                     try:
                         update_employee(update_data)
                         st.success("Ändringar sparade!")
-                       # st.experimental_rerun()
                     except Exception as e:
                         st.error(f"Fel vid uppdatering av anställd: {str(e)}")
     
     st.markdown("---")
     # --- Inställningar för schemagenerering ---
     st.subheader("Schemainställningar")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         period_start = st.date_input("Startdatum", value=datetime(2025, 2, 16).date())
         st.session_state["period_start"] = period_start
@@ -373,6 +379,11 @@ def show_chef_interface_wrapper():
                                                             min_value=5, max_value=50,
                                                             value=st.session_state.get("min_experience_req", 10),
                                                             step=1)
+    with col4:
+        st.session_state["team_size"] = st.slider("Antal anställda per pass",
+                                                  min_value=1, max_value=10,
+                                                  value=st.session_state.get("team_size", 3),
+                                                  step=1)
     st.markdown("### Skiftinställningar")
     col1, col2, col3 = st.columns(3)
     with col1:
