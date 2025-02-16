@@ -85,7 +85,7 @@ def remove_employee(employee_id):
         st.success("Anställd togs bort.")
         # Om du vill att sidan ska ladda om automatiskt, försök med st.experimental_rerun().
         # Om det orsakar problem, kommentera ut nästa rad.
-        st.experimental_rerun()
+        ## st.experimental_rerun()
     except Exception as e:
         st.error(f"Fel vid borttagning: {str(e)}")
 
