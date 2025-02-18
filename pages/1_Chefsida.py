@@ -2,11 +2,9 @@
 
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
 import random
 from datetime import datetime, timedelta
 from itertools import combinations
-import sqlite3
 from io import BytesIO  # För Excel-export
 
 from database import get_employees, update_employee
@@ -19,11 +17,6 @@ def setup_page():
 setup_page()
 
 # ---------- KONFIGURATION ----------
-THEME_COLORS = {
-    "light": {"primary": "#1E88E5", "secondary": "#FF6D00"},
-    "dark": {"primary": "#90CAF9", "secondary": "#FFAB40"}
-}
-
 LANGUAGES = {
     "sv": {
         "title": "AI-drivet Schemaläggningssystem",
@@ -87,96 +80,114 @@ def remove_employee(employee_id):
     except Exception as e:
         st.error(f"Fel vid borttagning: {str(e)}")
 
-# ---------- KONTROLLERA OM EN ANSTÄLLD KAN ARBETA VISST PASS ----------
-def can_work(emp, day, emp_state, shift_type):
+def can_work(emp, day, emp_state):
     """
     Kontrollerar om en anställd kan arbeta på given dag (MAX ett pass per dag).
     Kontrollerar även max_shifts och max_consec_days.
     """
     state = emp_state[emp["id"]]
     if day in state["assigned_days"]:
-        return (False, f"{emp['name']} är redan schemalagd den dagen.")
+        return False  # Redan schemalagd denna dag
     if state["worked_shifts"] >= emp["max_shifts"]:
-        return (False, f"{emp['name']} har nått max antal pass ({emp['max_shifts']}).")
+        return False  # Har nått max antal pass
     if state["last_worked_date"] is not None:
         delta = (day - state["last_worked_date"]).days
-        if delta == 1 and state["consec_days"] + 1 > emp["max_consec_days"]:
-            return (False, f"{emp['name']} överskrider max sammanhängande dagar ({emp['max_consec_days']}).")
-    return (True, "")
+        # Om personen jobbade dagen innan och har redan uppnått max_consec_days
+        if delta == 1 and state["consec_days"] >= emp["max_consec_days"]:
+            return False
+    return True
 
-# ---------- HUVUDFUNKTION FÖR TILLDELNING AV PASS (DAG FÖR DAG) ----------
-def assign_shifts_for_day(day, shifts, available, emp_state, min_exp_req, max_team_size):
+# ---------- BYGG FÄRGKODAD PIVOT I HTML ----------
+def build_color_coded_pivot(schedule_df):
     """
-    Försöker tilldela pass för en given dag.
-    - Vi prövar ALLA kombinationer av anställda från storlek 1 upp till max_team_size.
-    - Endast kombinationer som uppfyller minsta erfarenhet + minst en med erf >=4 är giltiga.
-    - Väljer den giltiga kombon med LÄGST total 'worked_shifts' (för att få bättre fördelning).
-    Returnerar en lista med tuples (shift, team) där team kan vara None om passet inte kan fyllas.
-    Uppdaterar även emp_state.
+    Skapar en HTML-pivot med färgkodade initialer.
+    Index = Datum, Kolumner = Skift, Värde = "Personal (Initialer)"
+    """
+    pivot = schedule_df.pivot(index="Datum", columns="Skift", values="Personal (Initialer)")
+    pivot = pivot.fillna("")
+
+    # Konvertera pivoten till HTML utan att escapa (så att <span>-taggarna behålls).
+    pivot_html = pivot.to_html(escape=False)
+    return pivot_html
+
+# ---------- TILLDELA PASS FÖR EN DAG ----------
+def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, max_team_size):
+    """
+    Tilldelar pass för en given dag.
+    - Testar alla kombinationer av storlek 1..max_team_size.
+    - Endast kombinationer som uppfyller (sum erf >= min_exp_req) + (minst 1 person med erf>=4) godkänns.
+    - Bland de giltiga väljs den/de med lägst total 'worked_shifts', och av dessa slumpas en.
+    Returnerar:
+      assignments -> lista av (shift_info, team)
+      emp_state   -> uppdaterad state
     """
     assignments = []
-    # Slumpa ordningen på available för att få variation
-    random.shuffle(available)
 
-    for shift in shifts:
+    for shift_info in shifts:
         valid_combos = []
-        # Försök med alla kombinationer av storlek 1..max_team_size
+        # Samla endast de i available_staff som kan jobba denna dag
+        # (fler kontroller görs sedan i kombinationssteget)
+        day_candidates = [emp for emp in available_staff if can_work(emp, day, emp_state)]
+
+        # Gå igenom alla kombinationer
         for size in range(1, max_team_size + 1):
-            for combo in combinations(available, size):
+            for combo in combinations(day_candidates, size):
                 total_exp = sum(emp["experience"] for emp in combo)
                 if total_exp < min_exp_req:
                     continue
-                # Kräver minst en anställd med erfarenhet >=4
+                # Kräver minst en person med erf >= 4
                 if not any(emp["experience"] >= 4 for emp in combo):
                     continue
 
-                # Kolla om alla i combo kan jobba
-                valid = True
+                # Kolla om alla i combo verkligen kan jobba (t.ex. max_consec_days)
+                all_ok = True
                 for emp in combo:
-                    ok, _ = can_work(emp, day, emp_state, shift["shift"])
-                    if not ok:
-                        valid = False
+                    if not can_work(emp, day, emp_state):
+                        all_ok = False
                         break
+                if not all_ok:
+                    continue
 
-                if valid:
-                    load = sum(emp_state[emp["id"]]["worked_shifts"] for emp in combo)
-                    valid_combos.append((combo, load))
+                # Räkna ihop hur många pass man redan jobbat, för att kunna göra "fair" val
+                combo_load = sum(emp_state[emp["id"]]["worked_shifts"] for emp in combo)
+                valid_combos.append((combo, combo_load))
 
         if valid_combos:
-            # Välj den combo som har lägst total load
-            best_combo, best_load = min(valid_combos, key=lambda x: x[1])
+            # Hitta minsta load
+            min_load_val = min(valid_combos, key=lambda x: x[1])[1]
+            # Plocka ut alla combos som har denna minsta load
+            best_options = [c for c in valid_combos if c[1] == min_load_val]
+            # Välj slumpmässigt bland dem
+            chosen_combo, _ = random.choice(best_options)
+
             # Uppdatera emp_state
-            for emp in best_combo:
+            for emp in chosen_combo:
                 state = emp_state[emp["id"]]
                 state["worked_shifts"] += 1
-                state["assigned_days"].add(day)
                 if state["last_worked_date"] is not None and (day - state["last_worked_date"]).days == 1:
                     state["consec_days"] += 1
                 else:
                     state["consec_days"] = 1
                 state["last_worked_date"] = day
-            assignments.append((shift, best_combo))
+                state["assigned_days"].add(day)
 
-            # Ta bort de som fått passet från available (max ett pass per dag)
-            for emp in best_combo:
-                if emp in available:
-                    available.remove(emp)
+            # Lägg till i assignments
+            assignments.append((shift_info, chosen_combo))
+            # Ta bort dem från dagens "available_staff" så de inte får dubbla pass
+            for emp in chosen_combo:
+                if emp in available_staff:
+                    available_staff.remove(emp)
         else:
-            assignments.append((shift, None))
+            # Ingen kombo funnen för detta skift
+            assignments.append((shift_info, None))
 
     return assignments, emp_state
 
-# ---------- HUVUDFUNKTION FÖR SCHEMAGENERERING ----------
-def generate_schedule(employees: list[tuple]) -> None:
-    """
-    Schemalägger tre skift per dag över en period (exempelvis två månader).
-    Varje pass (skift) ska ha:
-      - Total erfarenhet >= chefens krav (min_exp_req)
-      - Minst en anställd med erfarenhet >=4
-    Vi prövar från 1 upp till 'team_size' anställda för att nå kraven.
-    """
+# ---------- SCHEMAGENERERING ----------
+def generate_schedule(employees):
+    st.info("Genererar schema...")
 
-    # --- Hämta inställningar ---
+    # Hämta inställningar
     period_start = st.session_state["period_start"]
     period_length = st.session_state["period_length"]
     min_exp_req = st.session_state["min_experience_req"]
@@ -195,7 +206,7 @@ def generate_schedule(employees: list[tuple]) -> None:
         {"shift": "Natt", "start": night_start, "end": night_end}
     ]
 
-    # --- Bygg lista över datum ---
+    # Bygg datumlista
     dates = [period_start + timedelta(days=i) for i in range(period_length)]
     daily_shifts = {}
     for d in dates:
@@ -210,8 +221,8 @@ def generate_schedule(employees: list[tuple]) -> None:
                 "end": stype["end"]
             })
 
-    # --- Konvertera anställdas data till dictionaries ---
-    new_staff = []
+    # Konvertera employees -> dict
+    staff = []
     for e in employees:
         try:
             exp_val = int(e[7])
@@ -220,7 +231,7 @@ def generate_schedule(employees: list[tuple]) -> None:
         base_max = round((e[3] / 100) * period_length)
         if base_max < 1:
             base_max = 1
-        new_staff.append({
+        staff.append({
             "id": e[0],
             "name": e[2],
             "workload_percent": e[3],
@@ -231,14 +242,14 @@ def generate_schedule(employees: list[tuple]) -> None:
             "max_shifts": base_max
         })
 
-    # Säkerställ att minst en anställd har erfarenhet >=4
-    if not any(s["experience"] >= 4 for s in new_staff):
+    # Kontroll: minst en anställd med erf >= 4
+    if not any(s["experience"] >= 4 for s in staff):
         st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre.")
         return
 
-    # --- Initiera anställdastatus ---
+    # Initiera emp_state
     emp_state = {}
-    for s in new_staff:
+    for s in staff:
         emp_state[s["id"]] = {
             "worked_shifts": 0,
             "last_worked_date": None,
@@ -246,61 +257,64 @@ def generate_schedule(employees: list[tuple]) -> None:
             "assigned_days": set()
         }
 
-    # --- Schemalägg ---
+    # Schemalägg dag för dag
     schedule = []
     failed_days = {}
     for day in dates:
-        available_day = new_staff.copy()
-        random.shuffle(available_day)
-        shifts = daily_shifts[day]
+        # Slumpa ordningen för att undvika bias
+        random.shuffle(staff)
+        # Kopiera "staff" för dagens pass
+        available_day = staff.copy()
         assignments, emp_state = assign_shifts_for_day(
-            day, shifts, available_day, emp_state, min_exp_req, max_team_size
+            day, daily_shifts[day], available_day, emp_state, min_exp_req, max_team_size
         )
-        for shift, team in assignments:
-            if team is None:
+        for shift_info, combo in assignments:
+            if combo is None:
+                # Misslyckades att schemalägga
                 if day not in failed_days:
                     failed_days[day] = []
                 failed_days[day].append(
-                    f"{shift['shift']}: Ingen kombo uppfyllde kraven (erf >= {min_exp_req}, minst en person med erf>=4)."
+                    f"{shift_info['shift']} (krav: erf≥{min_exp_req}, minst 1 person med erf≥4)"
                 )
-            schedule.append({"slot": shift, "assigned": team})
+            schedule.append({"slot": shift_info, "assigned": combo})
 
+    # Visa varning för pass som inte kunde tillsättas
     if failed_days:
-        error_msgs = []
-        for d, msgs in failed_days.items():
-            for m in msgs:
-                error_msgs.append(f"{d} ({m})")
-        st.error("Följande pass kunde inte schemaläggas:\n" + "\n".join(error_msgs))
+        err_msgs = []
+        for d, shifts_failed in failed_days.items():
+            date_str = d.strftime("%Y-%m-%d")
+            for sf in shifts_failed:
+                err_msgs.append(f"{date_str}: {sf}")
+        st.error("Följande pass kunde inte schemaläggas:\n" + "\n".join(err_msgs))
 
-    # --- Färgkoda personalens initialer ---
-    # Skapa en palett och mappa varje anställd till en färg
+    # Bygg färgkarta
     palette = [
         "#FFD700", "#ADFF2F", "#FF69B4", "#87CEFA", "#FFA500",
         "#9370DB", "#40E0D0", "#F08080", "#98FB98", "#F5DEB3",
         "#C0C0C0", "#B0E0E6", "#FFB6C1", "#D8BFD8", "#BC8F8F",
         "#FFFFE0", "#B22222", "#DAA520", "#B8860B", "#556B2F"
     ]
-    employee_color_map = {}
-    for i, emp in enumerate(new_staff):
-        employee_color_map[emp["id"]] = palette[i % len(palette)]
+    color_map = {}
+    for i, s in enumerate(staff):
+        color_map[s["id"]] = palette[i % len(palette)]
 
-    # --- Bygg DataFrame för schemaöversikt ---
+    # Bygg DataFrame för schema
     schedule_rows = []
     for item in schedule:
         slot = item["slot"]
-        team = item["assigned"]
-        if team is None:
+        combo = item["assigned"]
+        if combo is None:
             initials_html = "–"
         else:
-            initials_html_list = []
-            for emp in team:
-                color = employee_color_map[emp["id"]]
+            parts = []
+            for emp in combo:
                 init = get_initials(emp["name"])
-                # HTML med bakgrundsfärg
-                styled_init = f'<span style="background-color:{color}; padding:2px 4px; border-radius:3px;">{init}</span>'
-                initials_html_list.append(styled_init)
-            # Sammanfoga alla i teamet
-            initials_html = " ".join(initials_html_list)
+                color = color_map[emp["id"]]
+                # HTML med färgad bakgrund
+                parts.append(
+                    f'<span style="background-color:{color}; padding:2px 4px; border-radius:3px;">{init}</span>'
+                )
+            initials_html = " ".join(parts)
 
         schedule_rows.append({
             "Datum": slot["date"].strftime("%Y-%m-%d"),
@@ -312,54 +326,49 @@ def generate_schedule(employees: list[tuple]) -> None:
 
     schedule_df = pd.DataFrame(schedule_rows)
 
-    # --- Summering: Antal pass per anställd ---
+    # Summering: antal pass per anställd
     summary_rows = []
-    for emp in new_staff:
+    for s in staff:
         summary_rows.append({
-            "Namn": emp["name"],
-            "Pass": emp_state[emp["id"]]["worked_shifts"]
+            "Namn": s["name"],
+            "Pass": emp_state[s["id"]]["worked_shifts"]
         })
     summary_df = pd.DataFrame(summary_rows).sort_values("Namn")
 
-    # --- Visa resultat i Streamlit ---
+    # --- VISNING I STREAMLIT ---
     st.subheader("Schemalagd översikt (färgkodade initialer)")
-    # Använd to_html(escape=False) för att behålla HTML-styling
+    # Övre tabell
     st.write(schedule_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
     st.subheader("Översikt: Antal pass per anställd")
     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-    # --- Kalenderöversikt (pivot) i Matplotlib ---
-    fig, ax = plt.subplots(figsize=(12, 6))
-    try:
-        pivot = schedule_df.pivot(index="Datum", columns="Skift", values="Personal (Initialer)")
-    except Exception:
-        pivot = pd.DataFrame()
-    ax.axis('tight')
-    ax.axis('off')
-    table = ax.table(cellText=pivot.fillna("").values,
-                     colLabels=pivot.columns,
-                     rowLabels=pivot.index,
-                     loc='center')
-    table.auto_set_font_size(False)
-    table.set_fontsize(8)
-    ax.set_title("Kalenderöversikt för kommande pass")
-    st.pyplot(fig)
+    # Kalenderöversikt (pivot i HTML, färgkodad)
+    st.subheader("Kalenderöversikt för kommande pass")
+    pivot_html = build_color_coded_pivot(schedule_df)
+    st.write(pivot_html, unsafe_allow_html=True)
 
-    # --- Exportera till Excel-knapp ---
+    # Export-knapp
     st.markdown("### Exportera schema till Excel")
     if st.button("Exportera schema till Excel"):
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            schedule_df_no_html = schedule_df.copy()
-            # Ta bort HTML innan export (om du vill ha rena initialer i Excelfilen)
-            schedule_df_no_html["Personal (Initialer)"] = schedule_df_no_html["Personal (Initialer)"].apply(
-                lambda x: " - ".join(
-                    part.split(">")[1].split("<")[0]  # extraherar texten mellan <span> och </span>
-                    for part in x.split("</span>") if "<span" in part
-                ) if x != "–" else "–"
-            )
-            schedule_df_no_html.to_excel(writer, index=False, sheet_name="Schema")
+            # Kopiera DataFrame och ta bort HTML-kod innan export
+            clean_schedule = schedule_df.copy()
+            def strip_html(cell):
+                # Tar ut texten mellan <span> och </span> (initialer)
+                if cell == "–":
+                    return cell
+                parts = []
+                for segment in cell.split("</span>"):
+                    if "<span" in segment:
+                        # t.ex. <span style="...">AB
+                        txt = segment.split(">")[-1]
+                        parts.append(txt)
+                return " ".join(parts)
+
+            clean_schedule["Personal (Initialer)"] = clean_schedule["Personal (Initialer)"].apply(strip_html)
+            clean_schedule.to_excel(writer, index=False, sheet_name="Schema")
             summary_df.to_excel(writer, index=False, sheet_name="Sammanfattning")
 
         st.download_button(
@@ -448,7 +457,7 @@ def show_chef_interface_wrapper():
     with col3:
         st.session_state["min_experience_req"] = st.slider(
             "Minsta totala erfarenhetspoäng per pass",
-            min_value=5, max_value=50,
+            min_value=1, max_value=50,
             value=st.session_state.get("min_experience_req", 10),
             step=1
         )
