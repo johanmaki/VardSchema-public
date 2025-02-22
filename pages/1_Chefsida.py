@@ -38,18 +38,18 @@ def init_session():
     defaults = {
         "staff": [],
         "hospital": "Karolinska",
-        "min_experience_req": 1,
-        "period_start": datetime(2025,2,16).date(),
-        "period_length": 30,
+        "min_experience_req": 1,        # Testinställning: Minsta totala erfarenhetspoäng per pass
+        "period_start": datetime(2025, 2, 16).date(),
+        "period_length": 30,            # Kortare period för test
         "morning_start": "06:00",
         "morning_end": "14:00",
         "em_start": "14:00",
         "em_end": "22:00",
         "night_start": "22:00",
         "night_end": "06:00",
-        "min_team_size": 1,
-        "require_experienced": False,
-        "prioritize_nattjour": False
+        "min_team_size": 1,             # Testinställning: Antal anställda per pass (min)
+        "require_experienced": False,   # Testinställning: Krav på erf≥4 avaktiverat
+        "prioritize_nattjour": False    # Testinställning: Prioritera inte endast 'Nattjour'
     }
     for key in required_keys:
         if key not in st.session_state:
@@ -291,7 +291,7 @@ def show_chef_interface_wrapper():
     st.title(f"👨💼 Chefssida - {st.session_state.hospital}")
     st.markdown("---")
     
-    # Lägg till en knapp för att nollställa databasen
+    # Knapp för att nollställa databasen
     if st.button("Nollställ databas"):
         if os.path.exists("vardschema.db"):
             os.remove("vardschema.db")
