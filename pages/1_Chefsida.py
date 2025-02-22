@@ -8,14 +8,14 @@ from io import BytesIO  # För Excel-export
 
 from database import get_employees, update_employee
 
-# ---------- SIDOPPSETTNING ----------
+# ========== SIDOPPSETTNING ==========
 def setup_page():
     """Konfigurerar Streamlit-sidan."""
     st.set_page_config(page_title="Chefsida", layout="wide")
 
 setup_page()
 
-# ---------- KONFIGURATION ----------
+# ========== KONFIGURATION ==========
 LANGUAGES = {
     "sv": {
         "title": "AI-drivet Schemaläggningssystem",
@@ -31,14 +31,14 @@ LANGUAGES = {
     }
 }
 
-# ---------- INITIERING AV SESSION ----------
+# ========== INITIERING AV SESSION ==========
 def init_session():
     """Initialiserar sessionen med nödvändiga nycklar."""
     required_keys = [
         "staff", "dark_mode", "language", "user_type", "hospital", "min_experience_req",
         "period_start", "period_length",
         "morning_start", "morning_end", "em_start", "em_end", "night_start", "night_end",
-        "min_team_size", "require_experienced"
+        "min_team_size", "require_experienced", "prioritize_nattjour"
     ]
     defaults = {
         "staff": [],
@@ -56,7 +56,8 @@ def init_session():
         "night_start": "22:00",
         "night_end": "06:00",
         "min_team_size": 3,              # Antal anställda per pass (min)
-        "require_experienced": True      # Krävs minst en med erf≥4 (kryssruta)
+        "require_experienced": True,     # Krävs minst en med erf≥4
+        "prioritize_nattjour": True      # Om True, nattpass filtrerar först "Nattjour"
     }
     for key in required_keys:
         if key not in st.session_state:
@@ -64,16 +65,16 @@ def init_session():
 
 init_session()
 
-# ---------- HJÄLPFUNKTIONER ----------
+# ========== HJÄLPFUNKTIONER ==========
 def get_initials(name):
     """Returnerar initialer från ett namn."""
     parts = name.split()
     return "".join(p[0].upper() for p in parts if p)
 
 def remove_employee(employee_id):
-    """Tar bort en anställd från databasen via database.py."""
+    """Tar bort en anställd från databasen."""
     try:
-        from database import delete_employee  # Se till att delete_employee() finns i database.py
+        from database import delete_employee
         delete_employee(employee_id)
         st.success("Anställd togs bort.")
         st.experimental_rerun()
@@ -86,10 +87,13 @@ def can_work(emp, day, emp_state):
     samt om medarbetaren inte redan uppnått sitt max antal pass eller max sammanhängande dagar.
     """
     state = emp_state[emp["id"]]
+    # Redan schemalagd denna dag?
     if day in state["assigned_days"]:
-        return False  # Redan schemalagd denna dag
+        return False
+    # Överstiger max_shifts?
     if state["worked_shifts"] >= state["max_shifts"]:
-        return False  # Har nått max antal pass
+        return False
+    # Kolla max sammanhängande dagar
     if state["last_worked_date"] is not None:
         delta = (day - state["last_worked_date"]).days
         if delta == 1 and state["consec_days"] >= emp["max_consec_days"]:
@@ -104,15 +108,11 @@ def parse_time(start_str, end_str):
     fmt = "%H:%M"
     t1 = datetime.strptime(start_str, fmt).time()
     t2 = datetime.strptime(end_str, fmt).time()
-    # Om man angett samma klockslag för start och slut -> tolkas som 22:00 -> 06:00
     if t1 == t2:
         # ex: 22:00-22:00 => tolka som 22:00-06:00
-        # Sätt t2 till 06:00
-        # Du kan anpassa detta om du vill
         t2 = datetime.strptime("06:00", fmt).time()
     return t1, t2
 
-# ---------- BYGG FÄRGKODAD PIVOT I HTML ----------
 def build_color_coded_pivot(schedule_df):
     """
     Skapar en HTML-pivot med färgkodade initialer.
@@ -123,56 +123,62 @@ def build_color_coded_pivot(schedule_df):
     pivot_html = pivot.to_html(escape=False)
     return pivot_html
 
-# ---------- TILLDELNINGSALGORITM (förenklad) ----------
-def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, min_team_size):
+# ========== TILLDELNINGSALGORITM (förenklad) ==========
+def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, min_team_size, debug_logs):
     """
-    Tilldelar pass för en given dag. (Förenklad)
+    Tilldelar pass för en given dag (förenklad).
     
     För varje skift:
       1) Bygg en lista av kandidater som kan arbeta idag (can_work).
-      2) Om skiftet är "Natt", filtrera helst de som har "Nattjour". Finns inga såna? Ta alla kandidater.
+      2) Om skiftet är "Natt" och prioritize_nattjour=True, filtrera de som har "Nattjour". 
+         Finns inga sådana? Ta alla kandidater.
       3) Sortera kandidaterna stigande efter ratio = (worked_shifts / max_shifts).
-         - Detta gör att de som jobbat minst relativt sin kvot prioriteras.
-      4) Plocka de första 'min_team_size' ur listan, men kolla:
-         - Uppfyller de totala erfarenhetspoängen >= min_exp_req?
-         - Om require_experienced är True, finns minst en med erf≥4?
-      5) Om dessa villkor uppfylls -> tilldela passet åt dem.
-         Annars -> passet blir otillsatt.
+      4) Ta ut de första 'min_team_size' i listan.
+         - Kolla om sum(erf) >= min_exp_req
+         - Om require_experienced är True, kolla om minst en har erf≥4
+      5) Om villkoren uppfylls => tilldela passet åt dem, annars => None
     Returnerar:
       assignments -> lista av (shift_info, team)
       emp_state   -> uppdaterad state
     """
     assignments = []
     require_experienced = st.session_state.get("require_experienced", True)
+    prioritize_nattjour = st.session_state.get("prioritize_nattjour", True)
 
     for shift_info in shifts:
+        shift_label = shift_info["shift"]
         day_candidates = [emp for emp in available_staff if can_work(emp, day, emp_state)]
 
-        # Hantera nattpass: välj först de som vill jobba natt, om sådana finns
-        if shift_info["shift"] == "Natt":
+        debug_logs.append(f"---\nDatum: {day}, Skift: {shift_label}, Kandidater innan nattfiltrering: {len(day_candidates)}")
+
+        # Om nattpass + prioritera "Nattjour"
+        if shift_label == "Natt" and prioritize_nattjour:
             night_pref = [emp for emp in day_candidates if "Nattjour" in emp["work_types"]]
             if night_pref:
                 day_candidates = night_pref
+            debug_logs.append(f"Nattjour aktiverat. Efter nattfiltrering: {len(day_candidates)} kandidater")
 
-        # Sortera kandidater efter ratio (worked_shifts / max_shifts)
-        # Lägst ratio = minst utnyttjade hittills
+        # Sortera efter ratio (worked_shifts / max_shifts)
         day_candidates.sort(key=lambda e: emp_state[e["id"]]["worked_shifts"] / e["max_shifts"])
+        debug_logs.append(f"Efter sortering: {len(day_candidates)} kandidater")
 
         if len(day_candidates) < min_team_size:
-            # Kan inte uppfylla min_team_size
+            debug_logs.append(f"❌ Misslyckas: day_candidates({len(day_candidates)}) < min_team_size({min_team_size})")
             assignments.append((shift_info, None))
             continue
 
-        # Ta ut de 'min_team_size' första
         chosen = day_candidates[:min_team_size]
         total_exp = sum(c["experience"] for c in chosen)
+        debug_logs.append(f"Valda: {[c['name'] for c in chosen]}, total_exp={total_exp}")
+
         if total_exp < min_exp_req:
+            debug_logs.append(f"❌ Misslyckas: total_exp({total_exp}) < min_exp_req({min_exp_req})")
             assignments.append((shift_info, None))
             continue
 
-        # Kolla krav på erf≥4 om det är ikryssat
         if require_experienced:
             if not any(c["experience"] >= 4 for c in chosen):
+                debug_logs.append("❌ Misslyckas: require_experienced=True men ingen har erf≥4")
                 assignments.append((shift_info, None))
                 continue
 
@@ -186,16 +192,15 @@ def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, 
                 state["consec_days"] = 1
             state["last_worked_date"] = day
             state["assigned_days"].add(day)
-
-            # Ta bort dem från today's available
             if emp in available_staff:
                 available_staff.remove(emp)
 
+        debug_logs.append(f"✅ Tilldelat: {[c['name'] for c in chosen]}")
         assignments.append((shift_info, chosen))
 
     return assignments, emp_state
 
-# ---------- SCHEMAGENERERING ----------
+# ========== SCHEMAGENERERING ==========
 def generate_schedule(employees):
     st.info("Genererar schema...")
 
@@ -205,7 +210,7 @@ def generate_schedule(employees):
     min_exp_req = st.session_state["min_experience_req"]
     min_team_size = st.session_state["min_team_size"]
 
-    # Tolkning av tid för skift (fixar om start == end)
+    # Tolkning av tid för skift
     morning_s, morning_e = parse_time(st.session_state["morning_start"], st.session_state["morning_end"])
     em_s, em_e = parse_time(st.session_state["em_start"], st.session_state["em_end"])
     night_s, night_e = parse_time(st.session_state["night_start"], st.session_state["night_end"])
@@ -238,7 +243,6 @@ def generate_schedule(employees):
             exp_val = int(e[7])
         except:
             exp_val = 0
-        # Max antal pass = (workload_procent / 100) * period_length
         base_max = round((e[3] / 100) * period_length)
         if base_max < 1:
             base_max = 1
@@ -248,12 +252,12 @@ def generate_schedule(employees):
             "workload_percent": e[3],
             "work_types": e[4].split(",") if e[4] else [],
             "max_consec_days": e[5],
-            "min_days_off": e[6],
+            "min_days_off": e[6],  # (används ej i exemplet)
             "experience": exp_val,
             "max_shifts": base_max
         })
 
-    # Om chefen kräver minst en anställd med erf ≥4 överhuvudtaget, kolla att det finns
+    # Om chefen kräver minst en anställd med erf ≥4
     if st.session_state["require_experienced"]:
         if not any(s["experience"] >= 4 for s in staff):
             st.error("Konflikt: Kräver minst en anställd med erfarenhet 4 eller högre, men ingen finns.")
@@ -270,15 +274,16 @@ def generate_schedule(employees):
             "max_shifts": s["max_shifts"]
         }
 
-    # Schemalägg dag för dag
     schedule = []
     failed_days = {}
+    debug_logs = []
+
+    # Schemalägg dag för dag
     for day in dates:
-        # Slumpa ordningen lite för att förhindra bias
         random.shuffle(staff)
         available_day = staff.copy()
         assignments, emp_state = assign_shifts_for_day(
-            day, daily_shifts[day], available_day, emp_state, min_exp_req, min_team_size
+            day, daily_shifts[day], available_day, emp_state, min_exp_req, min_team_size, debug_logs
         )
         for shift_info, combo in assignments:
             if not combo:  # None eller tom
@@ -338,6 +343,11 @@ def generate_schedule(employees):
     pivot_html = build_color_coded_pivot(schedule_df)
     st.write(pivot_html, unsafe_allow_html=True)
 
+    # Visa debug-info i en expander
+    with st.expander("Debug-info"):
+        for line in debug_logs:
+            st.write(line)
+
     st.markdown("### Exportera schema till Excel")
     if st.button("Exportera schema till Excel"):
         output = BytesIO()
@@ -366,13 +376,14 @@ def generate_schedule(employees):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-# ---------- GRÄNSSNITT FÖR CHEFEN ----------
+# ========== GRÄNSSNITT FÖR CHEFEN ==========
 def show_chef_interface_wrapper():
     init_session()
     lang = LANGUAGES["sv"]
     st.title(f"👨💼 Chefssida - {st.session_state.hospital}")
     st.markdown("---")
 
+    # --- Hantera anställda ---
     st.subheader("Hantera anställda")
     employees = get_employees(st.session_state.hospital)
     if employees:
@@ -386,6 +397,7 @@ def show_chef_interface_wrapper():
         st.info("Inga anställda finns att hantera.")
 
     st.markdown("---")
+    # --- Personalhantering (Redigera) ---
     st.header("👥 Personalhantering")
     if not employees:
         st.warning("Inga anställda registrerade ännu.")
@@ -432,6 +444,7 @@ def show_chef_interface_wrapper():
                         st.error(f"Fel vid uppdatering av anställd: {str(e)}")
 
     st.markdown("---")
+    # --- Schemainställningar ---
     st.subheader("Schemainställningar")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -454,10 +467,14 @@ def show_chef_interface_wrapper():
             value=st.session_state.get("min_team_size", 3),
             step=1
         )
-    # Kryssruta för att välja om minst en med erf≥4 ska krävas
+
+    # Kryssrutor för om minst en med erf≥4 krävs och om "Nattjour" ska prioriteras
     st.checkbox("Kräv minst en med erfarenhet ≥ 4 per pass",
                 value=st.session_state.get("require_experienced", True),
                 key="require_experienced")
+    st.checkbox("Prioritera endast 'Nattjour' på nattpass",
+                value=st.session_state.get("prioritize_nattjour", True),
+                key="prioritize_nattjour")
 
     st.markdown("### Skiftinställningar")
     colA, colB, colC = st.columns(3)
@@ -489,5 +506,5 @@ def show_chef_interface_wrapper():
                     unsafe_allow_html=True)
         st.stop()
 
-# ---------- Start ----------
+# ========== START ==========
 show_chef_interface_wrapper()
