@@ -1,4 +1,3 @@
-# pages/1_Chefsida.py
 import streamlit as st
 import pandas as pd
 import random
@@ -38,18 +37,18 @@ def init_session():
     defaults = {
         "staff": [],
         "hospital": "Karolinska",
-        "min_experience_req": 1,        # Testinställning: Minsta totala erfarenhetspoäng per pass
+        "min_experience_req": 1,
         "period_start": datetime(2025, 2, 16).date(),
-        "period_length": 30,            # Kortare period för test
+        "period_length": 30,
         "morning_start": "06:00",
         "morning_end": "14:00",
         "em_start": "14:00",
         "em_end": "22:00",
         "night_start": "22:00",
         "night_end": "06:00",
-        "min_team_size": 1,             # Testinställning: Antal anställda per pass (min)
-        "require_experienced": False,   # Testinställning: Krav på erf≥4 avaktiverat
-        "prioritize_nattjour": False    # Testinställning: Prioritera inte endast 'Nattjour'
+        "min_team_size": 1,
+        "require_experienced": False,
+        "prioritize_nattjour": False
     }
     for key in required_keys:
         if key not in st.session_state:
@@ -175,7 +174,7 @@ def generate_schedule(employees):
     staff = []
     for e in employees:
         try:
-            exp_val = int(e[7])
+            exp_val = int(e[6])  # Uppdaterat: experience ligger på index 6
         except:
             exp_val = 0
         base_max = round((e[3] / 100) * period_length)
@@ -186,7 +185,7 @@ def generate_schedule(employees):
             "name": e[2],
             "workload_percent": e[3],
             "work_types": e[4].split(",") if e[4] else [],
-            "min_days_off": e[6],
+            "min_days_off": e[5],
             "experience": exp_val,
             "max_shifts": base_max
         })
@@ -323,7 +322,7 @@ def show_chef_interface_wrapper():
                 with col1:
                     new_name = st.text_input("Namn", value=emp_data[2])
                     new_workload = st.slider("Arbetsbelastning (%)", 50, 100, emp_data[3], step=5)
-                    current_exp = emp_data[7] if emp_data[7] else 1
+                    current_exp = emp_data[6] if emp_data[6] else 1  # Uppdaterat index för experience
                     exp_index = max(0, int(current_exp) - 1)
                     new_exp = st.selectbox("Erfarenhetsnivå",
                                            options=list(LANGUAGES["sv"]["experience_labels"].keys()),
@@ -333,7 +332,7 @@ def show_chef_interface_wrapper():
                     work_types = st.multiselect("Arbetsformer",
                                                 ["Nattjour", "Dagskift", "Kvällsskift", "Helg", "Administration"],
                                                 default=emp_data[4].split(",") if emp_data[4] else [])
-                    min_off = st.number_input("Minsta lediga dagar", min_value=1, max_value=3, value=emp_data[6])
+                    min_off = st.number_input("Minsta lediga dagar", min_value=1, max_value=3, value=emp_data[5])
                 if st.form_submit_button("💾 Spara ändringar"):
                     update_data = {
                         "id": emp_id,
