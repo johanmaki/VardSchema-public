@@ -4,7 +4,6 @@ import streamlit as st
 import pandas as pd
 import random
 from datetime import datetime, timedelta
-from itertools import combinations
 from io import BytesIO  # För Excel-export
 
 from database import get_employees, update_employee
@@ -47,7 +46,7 @@ def init_session():
         "language": "sv",
         "user_type": "chef",
         "hospital": "Karolinska",
-        "min_experience_req": 10,        # Minsta totala erfarenhetspoäng per pass
+        "min_experience_req": 10,         # Minsta totala erfarenhetspoäng per pass
         "period_start": datetime(2025, 2, 16).date(),
         "period_length": 60,             # Schemaläggningsperiod i dagar
         "morning_start": "06:00",
@@ -57,7 +56,7 @@ def init_session():
         "night_start": "22:00",
         "night_end": "06:00",
         "min_team_size": 3,              # Antal anställda per pass (min)
-        "require_experienced": True      # Krävs minst en med erf≥4 (kan stängas av via kryssruta)
+        "require_experienced": True      # Krävs minst en med erf≥4 (kryssruta)
     }
     for key in required_keys:
         if key not in st.session_state:
@@ -97,6 +96,22 @@ def can_work(emp, day, emp_state):
             return False
     return True
 
+def parse_time(start_str, end_str):
+    """
+    Returnerar (start_time, end_time) som datetime.time.
+    Om start och end är samma klockslag, tolka det som pass över midnatt (ex: 22:00 -> 06:00).
+    """
+    fmt = "%H:%M"
+    t1 = datetime.strptime(start_str, fmt).time()
+    t2 = datetime.strptime(end_str, fmt).time()
+    # Om man angett samma klockslag för start och slut -> tolkas som 22:00 -> 06:00
+    if t1 == t2:
+        # ex: 22:00-22:00 => tolka som 22:00-06:00
+        # Sätt t2 till 06:00
+        # Du kan anpassa detta om du vill
+        t2 = datetime.strptime("06:00", fmt).time()
+    return t1, t2
+
 # ---------- BYGG FÄRGKODAD PIVOT I HTML ----------
 def build_color_coded_pivot(schedule_df):
     """
@@ -108,85 +123,75 @@ def build_color_coded_pivot(schedule_df):
     pivot_html = pivot.to_html(escape=False)
     return pivot_html
 
+# ---------- TILLDELNINGSALGORITM (förenklad) ----------
 def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, min_team_size):
     """
-    Tilldelar pass för en given dag.
-    - Alla kombinationer med storlek mellan min_team_size och antalet tillgängliga kandidater testas.
-    - En kombination godkänns om:
-         • Totala erfarenhetspoäng ≥ min_exp_req
-         • Om require_experienced är markerat, så krävs att minst en kandidat har erf≥4
-         • Alla medarbetare uppfyller övriga constraints
-    - För nattpass filtreras kandidater först utifrån att de har "Nattjour" i sina arbetsformer.
-      Om inga sådana finns används i stället alla tillgängliga kandidater.
-    - Bland de giltiga kombinationerna beräknas ett fairness-värde (baserat på nuvarande pass/planerade pass samt skiftpreferens).
-    - Om en giltig kombination hittas väljs den slumpmässigt.
+    Tilldelar pass för en given dag. (Förenklad)
+    
+    För varje skift:
+      1) Bygg en lista av kandidater som kan arbeta idag (can_work).
+      2) Om skiftet är "Natt", filtrera helst de som har "Nattjour". Finns inga såna? Ta alla kandidater.
+      3) Sortera kandidaterna stigande efter ratio = (worked_shifts / max_shifts).
+         - Detta gör att de som jobbat minst relativt sin kvot prioriteras.
+      4) Plocka de första 'min_team_size' ur listan, men kolla:
+         - Uppfyller de totala erfarenhetspoängen >= min_exp_req?
+         - Om require_experienced är True, finns minst en med erf≥4?
+      5) Om dessa villkor uppfylls -> tilldela passet åt dem.
+         Annars -> passet blir otillsatt.
     Returnerar:
       assignments -> lista av (shift_info, team)
       emp_state   -> uppdaterad state
     """
     assignments = []
-    shift_preference_map = {
-        "Morgon": "Dagskift",
-        "EM": "Kvällsskift",
-        "Natt": "Nattjour"
-    }
+    require_experienced = st.session_state.get("require_experienced", True)
 
     for shift_info in shifts:
-        valid_combos = []
-        # Filtrera kandidater som kan jobba denna dag
         day_candidates = [emp for emp in available_staff if can_work(emp, day, emp_state)]
-        # Vid nattpass, försök först använda de som vill jobba natt
+
+        # Hantera nattpass: välj först de som vill jobba natt, om sådana finns
         if shift_info["shift"] == "Natt":
-            natt_candidates = [emp for emp in day_candidates if "Nattjour" in emp["work_types"]]
-            if natt_candidates:
-                day_candidates = natt_candidates
+            night_pref = [emp for emp in day_candidates if "Nattjour" in emp["work_types"]]
+            if night_pref:
+                day_candidates = night_pref
 
-        # Testa alla teamstorlekar från min_team_size upp till antalet tillgängliga kandidater
-        for size in range(min_team_size, len(day_candidates) + 1):
-            for combo in combinations(day_candidates, size):
-                total_exp = sum(emp["experience"] for emp in combo)
-                if total_exp < min_exp_req:
-                    continue
-                if st.session_state.get("require_experienced", True):
-                    if not any(emp["experience"] >= 4 for emp in combo):
-                        continue
-                # Även om day_candidates redan är filtrerade kontrollerar vi för säkerhets skull
-                if not all(can_work(emp, day, emp_state) for emp in combo):
-                    continue
+        # Sortera kandidater efter ratio (worked_shifts / max_shifts)
+        # Lägst ratio = minst utnyttjade hittills
+        day_candidates.sort(key=lambda e: emp_state[e["id"]]["worked_shifts"] / e["max_shifts"])
 
-                # Beräkna fairness-värde: (worked_shifts / max_shifts) + eventuellt preferensstraff
-                combo_fairness = 0
-                pref_required = shift_preference_map.get(shift_info["shift"], None)
-                for emp in combo:
-                    ratio = emp_state[emp["id"]]["worked_shifts"] / emp_state[emp["id"]]["max_shifts"]
-                    penalty = 0 if (pref_required and pref_required in emp["work_types"]) else 1
-                    combo_fairness += ratio + penalty
-                combo_fairness /= len(combo)
-
-                valid_combos.append((combo, combo_fairness))
-
-        if valid_combos:
-            min_fairness = min(valid_combos, key=lambda x: x[1])[1]
-            best_options = [c for c in valid_combos if c[1] == min_fairness]
-            chosen_combo, _ = random.choice(best_options)
-
-            # Uppdatera emp_state för varje anställd i den valda kombinationen
-            for emp in chosen_combo:
-                state = emp_state[emp["id"]]
-                state["worked_shifts"] += 1
-                if state["last_worked_date"] is not None and (day - state["last_worked_date"]).days == 1:
-                    state["consec_days"] += 1
-                else:
-                    state["consec_days"] = 1
-                state["last_worked_date"] = day
-                state["assigned_days"].add(day)
-
-            assignments.append((shift_info, chosen_combo))
-            for emp in chosen_combo:
-                if emp in available_staff:
-                    available_staff.remove(emp)
-        else:
+        if len(day_candidates) < min_team_size:
+            # Kan inte uppfylla min_team_size
             assignments.append((shift_info, None))
+            continue
+
+        # Ta ut de 'min_team_size' första
+        chosen = day_candidates[:min_team_size]
+        total_exp = sum(c["experience"] for c in chosen)
+        if total_exp < min_exp_req:
+            assignments.append((shift_info, None))
+            continue
+
+        # Kolla krav på erf≥4 om det är ikryssat
+        if require_experienced:
+            if not any(c["experience"] >= 4 for c in chosen):
+                assignments.append((shift_info, None))
+                continue
+
+        # Nu uppfyller de villkoren => tilldela
+        for emp in chosen:
+            state = emp_state[emp["id"]]
+            state["worked_shifts"] += 1
+            if state["last_worked_date"] is not None and (day - state["last_worked_date"]).days == 1:
+                state["consec_days"] += 1
+            else:
+                state["consec_days"] = 1
+            state["last_worked_date"] = day
+            state["assigned_days"].add(day)
+
+            # Ta bort dem från today's available
+            if emp in available_staff:
+                available_staff.remove(emp)
+
+        assignments.append((shift_info, chosen))
 
     return assignments, emp_state
 
@@ -200,17 +205,15 @@ def generate_schedule(employees):
     min_exp_req = st.session_state["min_experience_req"]
     min_team_size = st.session_state["min_team_size"]
 
-    morning_start = st.session_state["morning_start"]
-    morning_end = st.session_state["morning_end"]
-    em_start = st.session_state["em_start"]
-    em_end = st.session_state["em_end"]
-    night_start = st.session_state["night_start"]
-    night_end = st.session_state["night_end"]
+    # Tolkning av tid för skift (fixar om start == end)
+    morning_s, morning_e = parse_time(st.session_state["morning_start"], st.session_state["morning_end"])
+    em_s, em_e = parse_time(st.session_state["em_start"], st.session_state["em_end"])
+    night_s, night_e = parse_time(st.session_state["night_start"], st.session_state["night_end"])
 
     shift_types = [
-        {"shift": "Morgon", "start": morning_start, "end": morning_end},
-        {"shift": "EM", "start": em_start, "end": em_end},
-        {"shift": "Natt", "start": night_start, "end": night_end}
+        {"shift": "Morgon", "start": morning_s.strftime("%H:%M"), "end": morning_e.strftime("%H:%M")},
+        {"shift": "EM",     "start": em_s.strftime("%H:%M"),     "end": em_e.strftime("%H:%M")},
+        {"shift": "Natt",   "start": night_s.strftime("%H:%M"),  "end": night_e.strftime("%H:%M")}
     ]
 
     # Bygg datumlista
@@ -228,13 +231,14 @@ def generate_schedule(employees):
                 "end": stype["end"]
             })
 
-    # Konvertera employees -> dict med nödvändiga värden
+    # Konvertera employees -> dict
     staff = []
     for e in employees:
         try:
             exp_val = int(e[7])
         except:
             exp_val = 0
+        # Max antal pass = (workload_procent / 100) * period_length
         base_max = round((e[3] / 100) * period_length)
         if base_max < 1:
             base_max = 1
@@ -249,12 +253,13 @@ def generate_schedule(employees):
             "max_shifts": base_max
         })
 
-    # Kontroll: minst en anställd med erf ≥ 4
-    if not any(s["experience"] >= 4 for s in staff):
-        st.error("Konflikt: Det måste finnas minst en anställd med erfarenhet 4 eller högre.")
-        return
+    # Om chefen kräver minst en anställd med erf ≥4 överhuvudtaget, kolla att det finns
+    if st.session_state["require_experienced"]:
+        if not any(s["experience"] >= 4 for s in staff):
+            st.error("Konflikt: Kräver minst en anställd med erfarenhet 4 eller högre, men ingen finns.")
+            return
 
-    # Initiera emp_state med sparat max_shifts
+    # Initiera emp_state
     emp_state = {}
     for s in staff:
         emp_state[s["id"]] = {
@@ -269,20 +274,22 @@ def generate_schedule(employees):
     schedule = []
     failed_days = {}
     for day in dates:
+        # Slumpa ordningen lite för att förhindra bias
         random.shuffle(staff)
         available_day = staff.copy()
         assignments, emp_state = assign_shifts_for_day(
             day, daily_shifts[day], available_day, emp_state, min_exp_req, min_team_size
         )
         for shift_info, combo in assignments:
-            if combo is None:
+            if not combo:  # None eller tom
                 if day not in failed_days:
                     failed_days[day] = []
                 failed_days[day].append(
-                    f"{shift_info['shift']} (krav: erf≥{min_exp_req} och {min_team_size} anställda)"
+                    f"{shift_info['shift']} (krav: erf≥{min_exp_req}, minst {min_team_size} pers)"
                 )
             schedule.append({"slot": shift_info, "assigned": combo})
 
+    # Meddela om pass inte kunde schemaläggas
     if failed_days:
         err_msgs = []
         for d, shifts_failed in failed_days.items():
@@ -291,8 +298,7 @@ def generate_schedule(employees):
                 err_msgs.append(f"{date_str}: {sf}")
         st.error("Följande pass kunde inte schemaläggas:\n" + "\n".join(err_msgs))
 
-    # Visa endast kalenderöversikten (pivot) – ta bort den tidigare tabellöversikten
-    st.subheader("Översikt: Antal pass per anställd")
+    # Summering av pass per person
     summary_rows = []
     for s in staff:
         summary_rows.append({
@@ -300,18 +306,35 @@ def generate_schedule(employees):
             "Pass": emp_state[s["id"]]["worked_shifts"]
         })
     summary_df = pd.DataFrame(summary_rows).sort_values("Namn")
+
+    # Bygg DataFrame för pivot
+    schedule_rows = []
+    for item in schedule:
+        slot = item["slot"]
+        combo = item["assigned"]
+        if combo:
+            initials_html = " ".join(
+                f'<span style="padding:2px 4px; border-radius:3px;">{get_initials(emp["name"])}</span>'
+                for emp in combo
+            )
+        else:
+            initials_html = "–"
+
+        schedule_rows.append({
+            "Datum": slot["date"].strftime("%Y-%m-%d"),
+            "Veckodag": slot["day"],
+            "Skift": slot["shift"],
+            "Tid": f"{slot['start']} - {slot['end']}",
+            "Personal (Initialer)": initials_html
+        })
+
+    schedule_df = pd.DataFrame(schedule_rows)
+
+    # --- VISNING I STREAMLIT ---
+    st.subheader("Översikt: Antal pass per anställd")
     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
     st.subheader("Kalenderöversikt för kommande pass")
-    schedule_df = pd.DataFrame([{
-        "Datum": slot["date"].strftime("%Y-%m-%d"),
-        "Veckodag": slot["day"],
-        "Skift": slot["shift"],
-        "Tid": f"{slot['start']} - {slot['end']}",
-        "Personal (Initialer)": " ".join(
-            f'<span style="background-color:{""}; padding:2px 4px; border-radius:3px;">{get_initials(emp["name"])}</span>'
-            for emp in team) if (team := item["assigned"]) else "–"
-    } for item in schedule for slot in [item["slot"]]])
     pivot_html = build_color_coded_pivot(schedule_df)
     st.write(pivot_html, unsafe_allow_html=True)
 
@@ -319,7 +342,9 @@ def generate_schedule(employees):
     if st.button("Exportera schema till Excel"):
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # Tvätta bort HTML från "Personal (Initialer)" innan export
             clean_schedule = schedule_df.copy()
+
             def strip_html(cell):
                 if cell == "–":
                     return cell
@@ -329,9 +354,11 @@ def generate_schedule(employees):
                         txt = segment.split(">")[-1]
                         parts.append(txt)
                 return " ".join(parts)
+
             clean_schedule["Personal (Initialer)"] = clean_schedule["Personal (Initialer)"].apply(strip_html)
             clean_schedule.to_excel(writer, index=False, sheet_name="Schema")
             summary_df.to_excel(writer, index=False, sheet_name="Sammanfattning")
+
         st.download_button(
             label="Ladda ner Excel",
             data=output.getvalue(),
@@ -428,30 +455,27 @@ def show_chef_interface_wrapper():
             step=1
         )
     # Kryssruta för att välja om minst en med erf≥4 ska krävas
-    st.checkbox("Kräv minst en med erfarenhet ≥ 4 per pass", value=st.session_state.get("require_experienced", True), key="require_experienced")
-    
+    st.checkbox("Kräv minst en med erfarenhet ≥ 4 per pass",
+                value=st.session_state.get("require_experienced", True),
+                key="require_experienced")
+
     st.markdown("### Skiftinställningar")
-    col1, col2, col3 = st.columns(3)
-    with col1:
+    colA, colB, colC = st.columns(3)
+    with colA:
         morning_start = st.time_input("Morgonpass start", value=datetime.strptime("06:00", "%H:%M").time())
         st.session_state["morning_start"] = morning_start.strftime("%H:%M")
-    with col2:
         morning_end = st.time_input("Morgonpass slut", value=datetime.strptime("14:00", "%H:%M").time())
         st.session_state["morning_end"] = morning_end.strftime("%H:%M")
-    with col3:
+    with colB:
         em_start = st.time_input("EM-pass start", value=datetime.strptime("14:00", "%H:%M").time())
         st.session_state["em_start"] = em_start.strftime("%H:%M")
-
-    col1, col2 = st.columns(2)
-    with col1:
         em_end = st.time_input("EM-pass slut", value=datetime.strptime("22:00", "%H:%M").time())
         st.session_state["em_end"] = em_end.strftime("%H:%M")
-    with col2:
+    with colC:
         night_start = st.time_input("Nattpass start", value=datetime.strptime("22:00", "%H:%M").time())
         st.session_state["night_start"] = night_start.strftime("%H:%M")
-
-    night_end = st.time_input("Nattpass slut", value=datetime.strptime("06:00", "%H:%M").time())
-    st.session_state["night_end"] = night_end.strftime("%H:%M")
+        night_end = st.time_input("Nattpass slut", value=datetime.strptime("06:00", "%H:%M").time())
+        st.session_state["night_end"] = night_end.strftime("%H:%M")
 
     st.markdown("---")
     if st.button("🚀 Generera schema"):
