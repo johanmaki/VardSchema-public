@@ -7,13 +7,13 @@ DB_NAME = "vardschema.db"
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    # Skapa tabell utan max_consec_days
     c.execute('''CREATE TABLE IF NOT EXISTS employees
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   hospital TEXT,
                   name TEXT,
                   workload INTEGER,
                   work_types TEXT,
-                  max_consec_days INTEGER,
                   min_days_off INTEGER,
                   experience INTEGER,
                   last_updated DATETIME)''')
@@ -32,26 +32,22 @@ def save_employee_prefs(data):
     
     if exists:
         c.execute('''UPDATE employees SET
-                     workload=?, work_types=?, max_consec_days=?,
-                     min_days_off=?, experience=?, last_updated=?
+                     workload=?, work_types=?, min_days_off=?, experience=?, last_updated=?
                      WHERE id=?''',
                   (data["workload"],
                    ",".join(data["work_types"]),
-                   data["max_consec_days"],
                    data["min_days_off"],
                    data["experience"],
                    datetime.now(),
                    exists[0]))
     else:
         c.execute('''INSERT INTO employees 
-                     (hospital, name, workload, work_types, 
-                      max_consec_days, min_days_off, experience, last_updated)
-                     VALUES (?,?,?,?,?,?,?,?)''',
+                     (hospital, name, workload, work_types, min_days_off, experience, last_updated)
+                     VALUES (?,?,?,?,?,?,?)''',
                   (data["hospital"],
                    data["name"],
                    data["workload"],
                    ",".join(data["work_types"]),
-                   data["max_consec_days"],
                    data["min_days_off"],
                    data["experience"],
                    datetime.now()))
@@ -71,12 +67,10 @@ def update_employee(data):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute('''UPDATE employees SET
-                 workload=?, work_types=?, max_consec_days=?,
-                 min_days_off=?, experience=?, last_updated=?
+                 workload=?, work_types=?, min_days_off=?, experience=?, last_updated=?
                  WHERE id=?''',
               (data["workload"],
                ",".join(data["work_types"]),
-               data["max_consec_days"],  # Ändrad från "max_consecutive_days" till "max_consec_days"
                data["min_days_off"],
                data["experience"],
                datetime.now(),
@@ -85,14 +79,11 @@ def update_employee(data):
     conn.close()
 
 def delete_employee(employee_id):
-    import sqlite3
-    from database import DB_NAME
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("DELETE FROM employees WHERE id=?", (employee_id,))
     conn.commit()
     conn.close()
-
 
 # Initiera databasen vid första import
 init_db()
