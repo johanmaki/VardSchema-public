@@ -4,6 +4,8 @@ import os
 import streamlit as st
 from datetime import datetime
 from database import save_employee_prefs
+from database import get_employees, update_employee, delete_employee
+
 
 # ========== KONFIGURATION ==========
 PREFERENCE_COLUMNS = [
