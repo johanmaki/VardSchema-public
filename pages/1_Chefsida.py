@@ -1,3 +1,4 @@
+# pages/1_Chefsida.py
 import streamlit as st
 import pandas as pd
 import random
@@ -37,18 +38,18 @@ def init_session():
     defaults = {
         "staff": [],
         "hospital": "Karolinska",
-        "min_experience_req": 1,
+        "min_experience_req": 1,        # Testinställning: Minsta erfarenhetspoäng per pass
         "period_start": datetime(2025, 2, 16).date(),
-        "period_length": 30,
+        "period_length": 30,            # Kortare period för test
         "morning_start": "06:00",
         "morning_end": "14:00",
         "em_start": "14:00",
         "em_end": "22:00",
         "night_start": "22:00",
         "night_end": "06:00",
-        "min_team_size": 1,
-        "require_experienced": False,
-        "prioritize_nattjour": False
+        "min_team_size": 1,             # Testinställning: 1 person per pass
+        "require_experienced": False,   # Testinställning: krav på erf≥4 avaktiverat
+        "prioritize_nattjour": False    # Testinställning: prioritera inte enbart 'Nattjour'
     }
     for key in required_keys:
         if key not in st.session_state:
@@ -64,7 +65,7 @@ def get_initials(name):
 def reset_database():
     if os.path.exists("vardschema.db"):
         os.remove("vardschema.db")
-        st.success("Databasen har återställts. Starta om applikationen för att ladda in den nya databasen.")
+        st.success("Databasen har återställts. Starta om applikationen.")
     else:
         st.info("Ingen databasfil hittades.")
 
@@ -85,6 +86,7 @@ def parse_time(start_str, end_str):
     return t1, t2
 
 def build_color_coded_pivot(schedule_df):
+    # Bygg en pivot-tabell med färgkodade initialer (HTML)
     pivot = schedule_df.pivot(index="Datum", columns="Skift", values="Personal (Initialer)")
     pivot = pivot.fillna("")
     return pivot.to_html(escape=False)
@@ -171,10 +173,11 @@ def generate_schedule(employees):
                 "end": stype["end"]
             })
     
+    # Konvertera employees till en lista med nödvändiga värden
     staff = []
     for e in employees:
         try:
-            exp_val = int(e[6])  # Uppdaterat: experience ligger på index 6
+            exp_val = int(e[6])  # experience ligger nu på index 6
         except:
             exp_val = 0
         base_max = round((e[3] / 100) * period_length)
@@ -194,6 +197,17 @@ def generate_schedule(employees):
         if not any(s["experience"] >= 4 for s in staff):
             st.error("Konflikt: Kräver minst en anställd med erfarenhet 4 eller högre, men ingen finns.")
             return
+    
+    # Skapa en färgkarta för personalen
+    palette = [
+        "#FFD700", "#ADFF2F", "#FF69B4", "#87CEFA", "#FFA500",
+        "#9370DB", "#40E0D0", "#F08080", "#98FB98", "#F5DEB3",
+        "#C0C0C0", "#B0E0E6", "#FFB6C1", "#D8BFD8", "#BC8F8F",
+        "#FFFFE0", "#B22222", "#DAA520", "#B8860B", "#556B2F"
+    ]
+    color_map = {}
+    for i, s in enumerate(staff):
+        color_map[s["id"]] = palette[i % len(palette)]
     
     emp_state = {}
     for s in staff:
@@ -239,7 +253,11 @@ def generate_schedule(employees):
         slot = item["slot"]
         combo = item["assigned"]
         if combo:
-            initials_html = " ".join(f'<span style="padding:2px 4px; border-radius:3px;">{get_initials(emp["name"])}</span>' for emp in combo)
+            # Använd färgkodning per anställd
+            initials_html = " ".join(
+                f'<span style="background-color:{color_map[emp["id"]]}; padding:2px 4px; border-radius:3px;">{get_initials(emp["name"])}</span>'
+                for emp in combo
+            )
         else:
             initials_html = "–"
         schedule_rows.append({
@@ -322,7 +340,7 @@ def show_chef_interface_wrapper():
                 with col1:
                     new_name = st.text_input("Namn", value=emp_data[2])
                     new_workload = st.slider("Arbetsbelastning (%)", 50, 100, emp_data[3], step=5)
-                    current_exp = emp_data[6] if emp_data[6] else 1  # Uppdaterat index för experience
+                    current_exp = emp_data[6] if emp_data[6] else 1
                     exp_index = max(0, int(current_exp) - 1)
                     new_exp = st.selectbox("Erfarenhetsnivå",
                                            options=list(LANGUAGES["sv"]["experience_labels"].keys()),
@@ -351,7 +369,7 @@ def show_chef_interface_wrapper():
     st.subheader("Schemainställningar")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.session_state["period_start"] = st.date_input("Startdatum", value=datetime(2025,2,16).date())
+        st.session_state["period_start"] = st.date_input("Startdatum", value=datetime(2025, 2, 16).date())
     with col2:
         st.session_state["period_length"] = st.number_input("Antal dagar att schemalägga", min_value=7, max_value=90, value=30)
     with col3:
