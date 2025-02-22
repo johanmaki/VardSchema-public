@@ -38,18 +38,18 @@ def init_session():
     defaults = {
         "staff": [],
         "hospital": "Karolinska",
-        "min_experience_req": 1,        # Testinställning: Minsta erfarenhetspoäng per pass
+        "min_experience_req": 1,        # Kan justeras via gränssnittet
         "period_start": datetime(2025, 2, 16).date(),
-        "period_length": 30,            # Kortare period för test
+        "period_length": 30,
         "morning_start": "06:00",
         "morning_end": "14:00",
         "em_start": "14:00",
         "em_end": "22:00",
         "night_start": "22:00",
         "night_end": "06:00",
-        "min_team_size": 1,             # Testinställning: 1 person per pass
-        "require_experienced": False,   # Testinställning: krav på erf≥4 avaktiverat
-        "prioritize_nattjour": False    # Testinställning: prioritera inte enbart 'Nattjour'
+        "min_team_size": 1,             # Minsta antal anställda per pass
+        "require_experienced": False,   # Kryssruta: om minst en med erf≥4 krävs
+        "prioritize_nattjour": False    # Kryssruta: om nattpass ska begränsas till Nattjour
     }
     for key in required_keys:
         if key not in st.session_state:
@@ -86,15 +86,37 @@ def parse_time(start_str, end_str):
     return t1, t2
 
 def build_color_coded_pivot(schedule_df):
-    # Bygg en pivot-tabell med färgkodade initialer (HTML)
     pivot = schedule_df.pivot(index="Datum", columns="Skift", values="Personal (Initialer)")
     pivot = pivot.fillna("")
     return pivot.to_html(escape=False)
 
+# ---------- TILLDELNINGSALGORITMEN ----------
 def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, min_team_size, debug_logs):
+    """
+    Tilldelar pass för en given dag.
+    
+    För varje skift:
+      1. Samla kandidater som kan arbeta idag (via can_work).
+      2. Om skiftet är "Natt" och kryssrutan "Prioritera endast 'Nattjour'" är aktiv,
+         filtrera kandidaterna så att endast de med "Nattjour" i work_types behålls.
+      3. För varje möjlig teamstorlek (från min_team_size upp till antalet kandidater) 
+         sök igenom alla kombinationer.
+         - En kombination accepteras om summan av erfarenhet ≥ min_exp_req.
+         - Om kryssrutan "Kräv minst en med erfarenhet ≥ 4 per pass" är aktiv, måste minst en i teamet ha erf≥4.
+         - Beräkna ett "fairness"-värde (genomsnitt av (worked_shifts / max_shifts) + ett straff om önskad arbetsform inte finns).
+      4. Välj den kombination med lägst fairness-värde (om flera, välj slumpmässigt).
+      5. Uppdatera emp_state och ta bort de tilldelade från available_staff.
+    
+    Returnerar en lista med assignments samt den uppdaterade emp_state.
+    """
     assignments = []
     require_experienced = st.session_state.get("require_experienced", False)
     prioritize_nattjour = st.session_state.get("prioritize_nattjour", False)
+    shift_pref_map = {
+        "Morgon": "Dagskift",
+        "EM": "Kvällsskift",
+        "Natt": "Nattjour"
+    }
     
     for shift_info in shifts:
         shift_label = shift_info["shift"]
@@ -107,38 +129,46 @@ def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, 
                 day_candidates = natt_candidates
             debug_logs.append(f"Efter nattjour-filtrering: {len(day_candidates)} kandidater")
         
+        # Sortera kandidater baserat på hur få pass de redan fått (i proportion till max_shifts)
         day_candidates.sort(key=lambda e: emp_state[e["id"]]["worked_shifts"] / e["max_shifts"])
         debug_logs.append(f"Efter sortering: {', '.join([e['name'] for e in day_candidates])}")
         
-        if len(day_candidates) < min_team_size:
-            debug_logs.append(f"❌ Misslyckas: {len(day_candidates)} kandidater < min_team_size({min_team_size})")
+        valid_combos = []
+        from itertools import combinations as comb
+        # Sök igenom alla teamkombinationer med storlek från min_team_size upp till antalet kandidater
+        for size in range(min_team_size, len(day_candidates) + 1):
+            for combo in comb(day_candidates, size):
+                total_exp = sum(c["experience"] for c in combo)
+                if total_exp < min_exp_req:
+                    continue
+                if require_experienced and not any(c["experience"] >= 4 for c in combo):
+                    continue
+                # Beräkna fairness: för varje anställd räknas (worked_shifts / max_shifts) + ett straff (1) om önskad arbetsform saknas
+                pref_required = shift_pref_map.get(shift_label)
+                fairness = 0
+                for c in combo:
+                    ratio = emp_state[c["id"]]["worked_shifts"] / c["max_shifts"]
+                    penalty = 0 if (pref_required and pref_required in c["work_types"]) else 1
+                    fairness += (ratio + penalty)
+                fairness /= len(combo)
+                valid_combos.append((combo, fairness))
+        
+        if valid_combos:
+            best_fairness = min(valid_combos, key=lambda x: x[1])[1]
+            best_options = [combo for combo, f in valid_combos if f == best_fairness]
+            chosen = random.choice(best_options)
+            for c in chosen:
+                state = emp_state[c["id"]]
+                state["worked_shifts"] += 1
+                state["last_worked_date"] = day
+                state["assigned_days"].add(day)
+                if c in available_staff:
+                    available_staff.remove(c)
+            debug_logs.append(f"✅ Tilldelat: {[c['name'] for c in chosen]}")
+            assignments.append((shift_info, chosen))
+        else:
+            debug_logs.append(f"❌ Inga giltiga kombinationer för {shift_label} på {day}")
             assignments.append((shift_info, None))
-            continue
-        
-        chosen = day_candidates[:min_team_size]
-        total_exp = sum(c["experience"] for c in chosen)
-        debug_logs.append(f"Valda: {[c['name'] for c in chosen]}, total_exp={total_exp}")
-        
-        if total_exp < min_exp_req:
-            debug_logs.append(f"❌ Misslyckas: total_exp({total_exp}) < min_exp_req({min_exp_req})")
-            assignments.append((shift_info, None))
-            continue
-        
-        if require_experienced and not any(c["experience"] >= 4 for c in chosen):
-            debug_logs.append("❌ Misslyckas: require_experienced=True men ingen har erf≥4")
-            assignments.append((shift_info, None))
-            continue
-        
-        for emp in chosen:
-            state = emp_state[emp["id"]]
-            state["worked_shifts"] += 1
-            state["last_worked_date"] = day
-            state["assigned_days"].add(day)
-            if emp in available_staff:
-                available_staff.remove(emp)
-        
-        debug_logs.append(f"✅ Tilldelat: {[c['name'] for c in chosen]}")
-        assignments.append((shift_info, chosen))
     
     return assignments, emp_state
 
@@ -253,11 +283,9 @@ def generate_schedule(employees):
         slot = item["slot"]
         combo = item["assigned"]
         if combo:
-            # Använd färgkodning per anställd
             initials_html = " ".join(
                 f'<span style="background-color:{color_map[emp["id"]]}; padding:2px 4px; border-radius:3px;">{get_initials(emp["name"])}</span>'
-                for emp in combo
-            )
+                for emp in combo)
         else:
             initials_html = "–"
         schedule_rows.append({
