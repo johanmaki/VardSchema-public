@@ -107,14 +107,14 @@ def build_color_coded_pivot(schedule_df):
     pivot_html = pivot.to_html(escape=False)
     return pivot_html
 
-# ---------- TILLDELA PASS FÖR EN DAG ----------
 def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, min_team_size):
     """
     Tilldelar pass för en given dag.
-    - Endast kombinationer med exakt "min_team_size" antal anställda testas.
+    - Alla kombinationer med storlek mellan min_team_size och antalet tillgängliga kandidater testas.
     - En kombination godkänns om:
          • Totala erfarenhetspoäng ≥ min_exp_req
-         • Om det finns kandidater med erfarenhet ≥ 4, så krävs att minst en sådan med i teamet
+         • Om require_experienced är markerat (via kryssruta) och det finns kandidater med erf≥4,
+           så krävs att minst en sådan med i teamet
          • Alla medarbetare uppfyller sina övriga constraints
     - Bland de giltiga kombinationerna beräknas ett fairness-värde (baserat på nuvarande pass/planerade pass samt skiftpreferens).
     - Om en giltig kombination hittas väljs den slumpmässigt.
@@ -123,7 +123,6 @@ def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, 
       emp_state   -> uppdaterad state
     """
     assignments = []
-
     shift_preference_map = {
         "Morgon": "Dagskift",
         "EM": "Kvällsskift",
@@ -134,28 +133,29 @@ def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, 
         valid_combos = []
         # Filtrera kandidater som kan jobba denna dag
         day_candidates = [emp for emp in available_staff if can_work(emp, day, emp_state)]
-        experienced_available = any(emp["experience"] >= 4 for emp in day_candidates)
+        # Testa alla teamstorlekar från min_team_size upp till totala antalet kandidater
+        for size in range(min_team_size, len(day_candidates) + 1):
+            for combo in combinations(day_candidates, size):
+                total_exp = sum(emp["experience"] for emp in combo)
+                if total_exp < min_exp_req:
+                    continue
+                # Om chefen kräver minst en med erf≥4, kontrollera att minst en finns i kombinationen
+                if st.session_state.get("require_experienced", True):
+                    if not any(emp["experience"] >= 4 for emp in combo):
+                        continue
+                if not all(can_work(emp, day, emp_state) for emp in combo):
+                    continue
 
-        # Endast kombinationer med exakt "min_team_size" anställda testas
-        for combo in combinations(day_candidates, min_team_size):
-            total_exp = sum(emp["experience"] for emp in combo)
-            if total_exp < min_exp_req:
-                continue
-            if experienced_available and not any(emp["experience"] >= 4 for emp in combo):
-                continue
-            if not all(can_work(emp, day, emp_state) for emp in combo):
-                continue
+                # Beräkna fairness-värde: (worked_shifts / max_shifts) + eventuellt preferensstraff
+                combo_fairness = 0
+                pref_required = shift_preference_map.get(shift_info["shift"], None)
+                for emp in combo:
+                    ratio = emp_state[emp["id"]]["worked_shifts"] / emp_state[emp["id"]]["max_shifts"]
+                    penalty = 0 if (pref_required and pref_required in emp["work_types"]) else 1
+                    combo_fairness += ratio + penalty
+                combo_fairness /= len(combo)
 
-            # Beräkna fairness-värde: (worked_shifts / max_shifts) + eventuellt preferensstraff
-            combo_fairness = 0
-            pref_required = shift_preference_map.get(shift_info["shift"], None)
-            for emp in combo:
-                ratio = emp_state[emp["id"]]["worked_shifts"] / emp_state[emp["id"]]["max_shifts"]
-                penalty = 0 if (pref_required and pref_required in emp["work_types"]) else 1
-                combo_fairness += ratio + penalty
-            combo_fairness /= len(combo)
-
-            valid_combos.append((combo, combo_fairness))
+                valid_combos.append((combo, combo_fairness))
 
         if valid_combos:
             min_fairness = min(valid_combos, key=lambda x: x[1])[1]
@@ -181,6 +181,7 @@ def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, 
             assignments.append((shift_info, None))
 
     return assignments, emp_state
+
 
 # ---------- SCHEMAGENERERING ----------
 def generate_schedule(employees):
