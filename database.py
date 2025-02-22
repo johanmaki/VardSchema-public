@@ -7,7 +7,7 @@ DB_NAME = "vardschema.db"
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # Skapa tabell utan max_consec_days
+    # Skapa tabellen med de nya fälten (utan max_consec_days)
     c.execute('''CREATE TABLE IF NOT EXISTS employees
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   hospital TEXT,
