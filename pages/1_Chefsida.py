@@ -5,9 +5,11 @@ import random
 from datetime import datetime, timedelta
 from io import BytesIO
 from itertools import combinations
+import os
 
-from database import get_employees, update_employee
+from database import get_employees, update_employee, delete_employee
 
+# ---------- SIDOPPSETTNING ----------
 def setup_page():
     st.set_page_config(page_title="Chefsida", layout="wide")
 
@@ -26,6 +28,7 @@ LANGUAGES = {
     }
 }
 
+# ---------- INITIERING AV SESSION ----------
 def init_session():
     required_keys = [
         "staff", "hospital", "min_experience_req", "period_start", "period_length",
@@ -35,18 +38,18 @@ def init_session():
     defaults = {
         "staff": [],
         "hospital": "Karolinska",
-        "min_experience_req": 1,       # Ändrat enligt testkrav
+        "min_experience_req": 1,
         "period_start": datetime(2025,2,16).date(),
-        "period_length": 30,           # Kortare period för test
+        "period_length": 30,
         "morning_start": "06:00",
         "morning_end": "14:00",
         "em_start": "14:00",
         "em_end": "22:00",
         "night_start": "22:00",
         "night_end": "06:00",
-        "min_team_size": 1,            # Testa med 1 person per pass
-        "require_experienced": False,  # För test, annars sätt True
-        "prioritize_nattjour": False   # För test, annars sätt True
+        "min_team_size": 1,
+        "require_experienced": False,
+        "prioritize_nattjour": False
     }
     for key in required_keys:
         if key not in st.session_state:
@@ -54,22 +57,20 @@ def init_session():
 
 init_session()
 
+# ---------- HJÄLPFUNKTIONER ----------
 def get_initials(name):
     parts = name.split()
     return "".join(p[0].upper() for p in parts if p)
 
-def remove_employee(employee_id):
-    try:
-        from database import delete_employee
-        delete_employee(employee_id)
-        st.success("Anställd togs bort.")
-        st.experimental_rerun()
-    except Exception as e:
-        st.error(f"Fel vid borttagning: {str(e)}")
+def reset_database():
+    if os.path.exists("vardschema.db"):
+        os.remove("vardschema.db")
+        st.success("Databasen har återställts. Starta om applikationen för att ladda in den nya databasen.")
+    else:
+        st.info("Ingen databasfil hittades.")
 
 def can_work(emp, day, emp_state):
     state = emp_state[emp["id"]]
-    # Ta bort consec_days-kontroll
     if day in state["assigned_days"]:
         return False
     if state["worked_shifts"] >= state["max_shifts"]:
@@ -91,7 +92,7 @@ def build_color_coded_pivot(schedule_df):
 
 def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, min_team_size, debug_logs):
     assignments = []
-    require_experienced = st.session_state.get("require_experienced", True)
+    require_experienced = st.session_state.get("require_experienced", False)
     prioritize_nattjour = st.session_state.get("prioritize_nattjour", False)
     
     for shift_info in shifts:
@@ -239,8 +240,7 @@ def generate_schedule(employees):
         slot = item["slot"]
         combo = item["assigned"]
         if combo:
-            initials_html = " ".join(f'<span style="padding:2px 4px; border-radius:3px;">{get_initials(emp["name"])}</span>'
-                                     for emp in combo)
+            initials_html = " ".join(f'<span style="padding:2px 4px; border-radius:3px;">{get_initials(emp["name"])}</span>' for emp in combo)
         else:
             initials_html = "–"
         schedule_rows.append({
@@ -285,11 +285,19 @@ def generate_schedule(employees):
                            data=output.getvalue(),
                            file_name="schema.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
+    
 def show_chef_interface_wrapper():
     init_session()
     st.title(f"👨💼 Chefssida - {st.session_state.hospital}")
     st.markdown("---")
+    
+    # Lägg till en knapp för att nollställa databasen
+    if st.button("Nollställ databas"):
+        if os.path.exists("vardschema.db"):
+            os.remove("vardschema.db")
+            st.success("Databasen har nollställts. Starta om applikationen.")
+        else:
+            st.info("Ingen databasfil hittades.")
     
     st.subheader("Hantera anställda")
     employees = get_employees(st.session_state.hospital)
@@ -316,7 +324,7 @@ def show_chef_interface_wrapper():
                     new_name = st.text_input("Namn", value=emp_data[2])
                     new_workload = st.slider("Arbetsbelastning (%)", 50, 100, emp_data[3], step=5)
                     current_exp = emp_data[7] if emp_data[7] else 1
-                    exp_index = max(0, int(current_exp)-1)
+                    exp_index = max(0, int(current_exp) - 1)
                     new_exp = st.selectbox("Erfarenhetsnivå",
                                            options=list(LANGUAGES["sv"]["experience_labels"].keys()),
                                            index=exp_index,
