@@ -39,7 +39,7 @@ def init_session():
         "staff", "dark_mode", "language", "user_type", "hospital", "min_experience_req",
         "period_start", "period_length",
         "morning_start", "morning_end", "em_start", "em_end", "night_start", "night_end",
-        "min_team_size"
+        "min_team_size", "require_experienced"
     ]
     defaults = {
         "staff": [],
@@ -56,7 +56,8 @@ def init_session():
         "em_end": "22:00",
         "night_start": "22:00",
         "night_end": "06:00",
-        "min_team_size": 3               # Antal anställda per pass (min)
+        "min_team_size": 3,              # Antal anställda per pass (min)
+        "require_experienced": True      # Krävs minst en med erf≥4 (kan stängas av via kryssruta)
     }
     for key in required_keys:
         if key not in st.session_state:
@@ -113,9 +114,10 @@ def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, 
     - Alla kombinationer med storlek mellan min_team_size och antalet tillgängliga kandidater testas.
     - En kombination godkänns om:
          • Totala erfarenhetspoäng ≥ min_exp_req
-         • Om require_experienced är markerat (via kryssruta) och det finns kandidater med erf≥4,
-           så krävs att minst en sådan med i teamet
-         • Alla medarbetare uppfyller sina övriga constraints
+         • Om require_experienced är markerat, så krävs att minst en kandidat har erf≥4
+         • Alla medarbetare uppfyller övriga constraints
+    - För nattpass filtreras kandidater först utifrån att de har "Nattjour" i sina arbetsformer.
+      Om inga sådana finns används i stället alla tillgängliga kandidater.
     - Bland de giltiga kombinationerna beräknas ett fairness-värde (baserat på nuvarande pass/planerade pass samt skiftpreferens).
     - Om en giltig kombination hittas väljs den slumpmässigt.
     Returnerar:
@@ -133,16 +135,22 @@ def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, 
         valid_combos = []
         # Filtrera kandidater som kan jobba denna dag
         day_candidates = [emp for emp in available_staff if can_work(emp, day, emp_state)]
-        # Testa alla teamstorlekar från min_team_size upp till totala antalet kandidater
+        # Vid nattpass, försök först använda de som vill jobba natt
+        if shift_info["shift"] == "Natt":
+            natt_candidates = [emp for emp in day_candidates if "Nattjour" in emp["work_types"]]
+            if natt_candidates:
+                day_candidates = natt_candidates
+
+        # Testa alla teamstorlekar från min_team_size upp till antalet tillgängliga kandidater
         for size in range(min_team_size, len(day_candidates) + 1):
             for combo in combinations(day_candidates, size):
                 total_exp = sum(emp["experience"] for emp in combo)
                 if total_exp < min_exp_req:
                     continue
-                # Om chefen kräver minst en med erf≥4, kontrollera att minst en finns i kombinationen
                 if st.session_state.get("require_experienced", True):
                     if not any(emp["experience"] >= 4 for emp in combo):
                         continue
+                # Även om day_candidates redan är filtrerade kontrollerar vi för säkerhets skull
                 if not all(can_work(emp, day, emp_state) for emp in combo):
                     continue
 
@@ -182,7 +190,6 @@ def assign_shifts_for_day(day, shifts, available_staff, emp_state, min_exp_req, 
 
     return assignments, emp_state
 
-
 # ---------- SCHEMAGENERERING ----------
 def generate_schedule(employees):
     st.info("Genererar schema...")
@@ -221,7 +228,7 @@ def generate_schedule(employees):
                 "end": stype["end"]
             })
 
-    # Konvertera employees -> dict
+    # Konvertera employees -> dict med nödvändiga värden
     staff = []
     for e in employees:
         try:
@@ -284,41 +291,8 @@ def generate_schedule(employees):
                 err_msgs.append(f"{date_str}: {sf}")
         st.error("Följande pass kunde inte schemaläggas:\n" + "\n".join(err_msgs))
 
-    palette = [
-        "#FFD700", "#ADFF2F", "#FF69B4", "#87CEFA", "#FFA500",
-        "#9370DB", "#40E0D0", "#F08080", "#98FB98", "#F5DEB3",
-        "#C0C0C0", "#B0E0E6", "#FFB6C1", "#D8BFD8", "#BC8F8F",
-        "#FFFFE0", "#B22222", "#DAA520", "#B8860B", "#556B2F"
-    ]
-    color_map = {}
-    for i, s in enumerate(staff):
-        color_map[s["id"]] = palette[i % len(palette)]
-
-    schedule_rows = []
-    for item in schedule:
-        slot = item["slot"]
-        combo = item["assigned"]
-        if combo is None:
-            initials_html = "–"
-        else:
-            parts = []
-            for emp in combo:
-                init = get_initials(emp["name"])
-                color = color_map[emp["id"]]
-                parts.append(
-                    f'<span style="background-color:{color}; padding:2px 4px; border-radius:3px;">{init}</span>'
-                )
-            initials_html = " ".join(parts)
-        schedule_rows.append({
-            "Datum": slot["date"].strftime("%Y-%m-%d"),
-            "Veckodag": slot["day"],
-            "Skift": slot["shift"],
-            "Tid": f"{slot['start']} - {slot['end']}",
-            "Personal (Initialer)": initials_html
-        })
-
-    schedule_df = pd.DataFrame(schedule_rows)
-
+    # Visa endast kalenderöversikten (pivot) – ta bort den tidigare tabellöversikten
+    st.subheader("Översikt: Antal pass per anställd")
     summary_rows = []
     for s in staff:
         summary_rows.append({
@@ -326,14 +300,18 @@ def generate_schedule(employees):
             "Pass": emp_state[s["id"]]["worked_shifts"]
         })
     summary_df = pd.DataFrame(summary_rows).sort_values("Namn")
-
-    st.subheader("Schemalagd översikt (färgkodade initialer)")
-    st.write(schedule_df.to_html(escape=False, index=False), unsafe_allow_html=True)
-
-    st.subheader("Översikt: Antal pass per anställd")
     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
     st.subheader("Kalenderöversikt för kommande pass")
+    schedule_df = pd.DataFrame([{
+        "Datum": slot["date"].strftime("%Y-%m-%d"),
+        "Veckodag": slot["day"],
+        "Skift": slot["shift"],
+        "Tid": f"{slot['start']} - {slot['end']}",
+        "Personal (Initialer)": " ".join(
+            f'<span style="background-color:{""}; padding:2px 4px; border-radius:3px;">{get_initials(emp["name"])}</span>'
+            for emp in team) if (team := item["assigned"]) else "–"
+    } for item in schedule for slot in [item["slot"]]])
     pivot_html = build_color_coded_pivot(schedule_df)
     st.write(pivot_html, unsafe_allow_html=True)
 
@@ -361,6 +339,7 @@ def generate_schedule(employees):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
+# ---------- GRÄNSSNITT FÖR CHEFEN ----------
 def show_chef_interface_wrapper():
     init_session()
     lang = LANGUAGES["sv"]
@@ -448,7 +427,9 @@ def show_chef_interface_wrapper():
             value=st.session_state.get("min_team_size", 3),
             step=1
         )
-
+    # Kryssruta för att välja om minst en med erf≥4 ska krävas
+    st.checkbox("Kräv minst en med erfarenhet ≥ 4 per pass", value=st.session_state.get("require_experienced", True), key="require_experienced")
+    
     st.markdown("### Skiftinställningar")
     col1, col2, col3 = st.columns(3)
     with col1:
